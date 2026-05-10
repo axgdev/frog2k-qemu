@@ -160,6 +160,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_IRQ_STATUS1     0x18800030ULL
 #define SF2000_IRQ_STATUS2     0x18800034ULL
 #define SF2000_IRQ_ENABLE1     0x18800038ULL
+#define SF2000_IRQ_ENABLE2     0x1880003cULL
 #define SF2000_TIMER_COUNT     8
 #define SF2000_TIMER_STEP      0x10
 #define SF2000_TIMER_CTRL_EN   BIT(2)
@@ -386,6 +387,8 @@ static uint32_t sf2000_timer_aim[SF2000_TIMER_COUNT];
 static uint32_t sf2000_timer_ctrl[SF2000_TIMER_COUNT];
 static int64_t sf2000_next_tick_ns;
 static int64_t sf2000_next_vsync_ns;
+static uint32_t sf2000_irq_enable1;
+static uint32_t sf2000_irq_enable2;
 static uint32_t sf2000_adc_ctrl[4];
 static uint8_t sf2000_bootrom_bytes[SF2000_BOOT_SIZE];
 static QEMUTimer *sf2000_irq_poll_timer;
@@ -441,6 +444,10 @@ static uint32_t sf2000_last_call_pc;
 static bool sf2000_stock_security_patched;
 static bool sf2000_stock_archive_path_patched;
 static bool sf2000_stock_archive_access_patched;
+static int sf2000_trace_pc_enabled_cache = -1;
+static int sf2000_patch_security_enabled_cache = -1;
+static int sf2000_patch_archive_path_enabled_cache = -1;
+static int sf2000_patch_archive_access_enabled_cache = -1;
 
 typedef struct SF2000KeyMap {
     QKeyCode qcode;
@@ -521,6 +528,39 @@ static hwaddr sf2000_guest_phys_addr(uint32_t vaddr)
     return vaddr;
 }
 
+static bool sf2000_env_flag(const char *name, int *cache)
+{
+    if (*cache < 0) {
+        const char *env = g_getenv(name);
+
+        *cache = env && env[0] && g_strcmp0(env, "0") != 0;
+    }
+    return *cache != 0;
+}
+
+static bool sf2000_trace_pc_enabled(void)
+{
+    return sf2000_env_flag("SF2000_TRACE_PC", &sf2000_trace_pc_enabled_cache);
+}
+
+static bool sf2000_patch_security_enabled(void)
+{
+    return sf2000_env_flag("SF2000_PATCH_STOCK_SECURITY",
+                           &sf2000_patch_security_enabled_cache);
+}
+
+static bool sf2000_patch_archive_path_enabled(void)
+{
+    return sf2000_env_flag("SF2000_PATCH_STOCK_ARCHIVE_SHORTNAME",
+                           &sf2000_patch_archive_path_enabled_cache);
+}
+
+static bool sf2000_patch_archive_access_enabled(void)
+{
+    return sf2000_env_flag("SF2000_PATCH_STOCK_ARCHIVE_ACCESS_WAIT",
+                           &sf2000_patch_archive_access_enabled_cache);
+}
+
 static void sf2000_guest_read_string(uint32_t vaddr, char *buf, size_t len)
 {
     hwaddr addr = sf2000_guest_phys_addr(vaddr);
@@ -548,7 +588,7 @@ static void sf2000_guest_read_string(uint32_t vaddr, char *buf, size_t len)
 
 static void sf2000_trace_fw_call(uint32_t pc, MIPSCPU *cpu)
 {
-    bool stderr_trace = g_getenv("SF2000_TRACE_PC") != NULL;
+    bool stderr_trace = sf2000_trace_pc_enabled();
     char arg0[96];
     char arg1[32];
     uint32_t a0 = (uint32_t)cpu->env.active_tc.gpr[4];
@@ -611,7 +651,7 @@ static void sf2000_trace_pc_landmark(void)
     CPUState *cs = first_cpu;
     MIPSCPU *cpu;
     uint32_t pc;
-    bool stderr_trace = g_getenv("SF2000_TRACE_PC") != NULL;
+    bool stderr_trace = sf2000_trace_pc_enabled();
     unsigned i;
 
     if (!cs) {
@@ -675,8 +715,7 @@ static void sf2000_patch_stock_security_check(void)
     CPUState *cs = first_cpu;
     MIPSCPU *cpu;
 
-    if (sf2000_stock_security_patched ||
-        !g_getenv("SF2000_PATCH_STOCK_SECURITY")) {
+    if (sf2000_stock_security_patched || !sf2000_patch_security_enabled()) {
         return;
     }
     if (!cs) {
@@ -713,7 +752,7 @@ static void sf2000_patch_stock_archive_path(void)
     MIPSCPU *cpu;
 
     if (sf2000_stock_archive_path_patched ||
-        !g_getenv("SF2000_PATCH_STOCK_ARCHIVE_SHORTNAME")) {
+        !sf2000_patch_archive_path_enabled()) {
         return;
     }
     if (!cs) {
@@ -758,7 +797,7 @@ static void sf2000_patch_stock_archive_access_wait(void)
     MIPSCPU *cpu;
 
     if (sf2000_stock_archive_access_patched ||
-        !g_getenv("SF2000_PATCH_STOCK_ARCHIVE_ACCESS_WAIT")) {
+        !sf2000_patch_archive_access_enabled()) {
         return;
     }
     if (!cs) {
@@ -818,15 +857,7 @@ static bool sf2000_timer_configured(unsigned index)
 
 static bool sf2000_irq1_enabled(uint32_t mask)
 {
-    unsigned i;
-
-    for (i = 0; i < ARRAY_SIZE(sf2000_regs); i++) {
-        if (sf2000_regs[i].valid && sf2000_regs[i].addr == SF2000_IRQ_ENABLE1) {
-            return (sf2000_regs[i].value & mask) != 0;
-        }
-    }
-
-    return false;
+    return (sf2000_irq_enable1 & mask) != 0;
 }
 
 static bool sf2000_uart_decode(hwaddr full_addr, unsigned *index,
@@ -1257,20 +1288,58 @@ static void sf2000_update_irq(void)
 
 static void sf2000_irq_poll_timer_cb(void *opaque)
 {
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    int64_t next = now + NANOSECONDS_PER_SECOND;
+    unsigned i;
+
     /*
      * The stock FreeRTOS port eventually idles in a tight branch loop and
      * expects the south-bridge timer interrupt to arrive without any MMIO
      * activity. Re-evaluate the level periodically so QEMU can assert EIRQ3
      * after virtual time advances instead of only during register accesses.
      */
-    sf2000_trace_pc_landmark();
-    sf2000_patch_stock_security_check();
-    sf2000_patch_stock_archive_path();
-    sf2000_patch_stock_archive_access_wait();
+    if (sf2000_trace_pc_enabled()) {
+        sf2000_trace_pc_landmark();
+    }
+    if (sf2000_patch_security_enabled()) {
+        sf2000_patch_stock_security_check();
+    }
+    if (sf2000_patch_archive_path_enabled()) {
+        sf2000_patch_stock_archive_path();
+    }
+    if (sf2000_patch_archive_access_enabled()) {
+        sf2000_patch_stock_archive_access_wait();
+    }
     sf2000_update_irq();
+
+    if (sf2000_trace_pc_enabled() ||
+        (sf2000_patch_security_enabled() && !sf2000_stock_security_patched) ||
+        (sf2000_patch_archive_path_enabled() &&
+         !sf2000_stock_archive_path_patched) ||
+        (sf2000_patch_archive_access_enabled() &&
+         !sf2000_stock_archive_access_patched)) {
+        next = now + NANOSECONDS_PER_SECOND / 1000;
+    } else {
+        if (sf2000_gpio_l_vsync_enabled() && sf2000_next_vsync_ns < next) {
+            next = sf2000_next_vsync_ns;
+        }
+        if (sf2000_irq1_enabled(SF2000_SB_TIMER_IRQ)) {
+            if (!sf2000_timer5_configured() && sf2000_next_tick_ns < next) {
+                next = sf2000_next_tick_ns;
+            }
+            for (i = 0; i < SF2000_TIMER_COUNT; i++) {
+                if (sf2000_timer_configured(i)) {
+                    next = now + NANOSECONDS_PER_SECOND / 1000;
+                    break;
+                }
+            }
+        }
+    }
+    if (next <= now) {
+        next = now + NANOSECONDS_PER_SECOND / 1000;
+    }
     timer_mod(sf2000_irq_poll_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-              NANOSECONDS_PER_SECOND / 1000);
+              next);
 }
 
 static bool sf2000_trace_sdio(void)
@@ -2835,6 +2904,13 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_regs[i].value = (old_value & ~mask) |
                                (((uint32_t)value << shift) & mask);
     }
+    if (i != ARRAY_SIZE(sf2000_regs)) {
+        if ((full_addr & ~3u) == SF2000_IRQ_ENABLE1) {
+            sf2000_irq_enable1 = sf2000_regs[i].value;
+        } else if ((full_addr & ~3u) == SF2000_IRQ_ENABLE2) {
+            sf2000_irq_enable2 = sf2000_regs[i].value;
+        }
+    }
 
     if (sf2000_timer_decode(full_addr, &timer_index, &timer_offset)) {
         switch (timer_offset) {
@@ -3183,6 +3259,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     uint32_t mode, clut_update, sx, ex, sy, ey, src_w, src_h, pitch;
     uint32_t sample_w, sample_h;
     uint32_t width, height, bpp;
+    bool scale_x, scale_y;
     int y;
 
     if (!s || !dmba_addr) {
@@ -3278,6 +3355,8 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     if (mode == 0x06 && (d0 & 1)) {
         return d6;
     }
+    scale_x = sample_w != width;
+    scale_y = sample_h != height;
 
     surface = qemu_console_surface(s->con);
     if (surface_bits_per_pixel(surface) != 32 ||
@@ -3299,7 +3378,8 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     for (y = 0; y < height; y++) {
         uint32_t *dst = (uint32_t *)(surface_data(surface) +
                         (sy + y) * surface_stride(surface)) + sx;
-        uint32_t src_y = ((uint64_t)y * sample_h) / height;
+        uint32_t src_y = scale_y ? ((uint64_t)y * sample_h) / height :
+                         (uint32_t)y;
         int x;
 
         if (address_space_read(&address_space_memory,
@@ -3309,7 +3389,8 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
             break;
         }
         for (x = 0; x < width; x++) {
-            uint32_t src_x = ((uint64_t)x * sample_w) / width;
+            uint32_t src_x = scale_x ? ((uint64_t)x * sample_w) / width :
+                             (uint32_t)x;
 
             if (mode == 0x06) {
                 dst[x] = sf2000_rgb565_to_surface(
@@ -3736,6 +3817,8 @@ static void sf2000_init(MachineState *machine)
     sf2000_adc_ctrl[1] = 0x20001400;
     sf2000_adc_ctrl[2] = 0x00000f2d;
     sf2000_adc_ctrl[3] = 0x00000001;
+    sf2000_irq_enable1 = 0x00480415;
+    sf2000_irq_enable2 = 0x003c0008;
     sf2000_i2c_data[0] = 0x00;
     sf2000_i2c_isr[0] = 0x00;
     sf2000_i2c_ier[0] = 0x00;
