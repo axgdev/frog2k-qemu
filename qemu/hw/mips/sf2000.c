@@ -3862,6 +3862,13 @@ static void sf2000_init(MachineState *machine)
         sf2000_sdio_blk = blk_by_legacy_dinfo(dinfo);
     }
     if (sf2000_sdio_blk) {
+        Error *local_err = NULL;
+
+        if (blk_set_perm(sf2000_sdio_blk,
+                         BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE,
+                         BLK_PERM_ALL, &local_err) < 0) {
+            warn_report_err(local_err);
+        }
         info_report("sf2000: using SD image '%s'", blk_name(sf2000_sdio_blk));
     } else {
         info_report("sf2000: no SD image supplied; using synthetic FAT probe media");
