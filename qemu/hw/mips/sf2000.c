@@ -27,6 +27,7 @@
 #include "system/block-backend-global-state.h"
 #include "system/blockdev.h"
 #include "system/reset.h"
+#include "system/runstate.h"
 #include "system/dma.h"
 #include "exec/tb-flush.h"
 #include "elf.h"
@@ -2884,6 +2885,10 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     } else if (sf2000_wdt_decode(full_addr)) {
         if ((full_addr & 0xff) == 0x04 && value == 0) {
             qemu_log_mask(LOG_UNIMP, "sf2000: watchdog disabled\n");
+        } else if ((full_addr & 0xff) == 0x04 && value != 0) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: watchdog reboot requested\n");
+            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
         }
     } else if (full_addr == SF2000_IRQ_STATUS1 && (value & SF2000_SDIO_IRQ)) {
         sf2000_sdio_irq_pending = false;
