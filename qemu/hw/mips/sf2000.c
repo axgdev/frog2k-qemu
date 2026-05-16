@@ -29,6 +29,7 @@
 #include "system/reset.h"
 #include "system/dma.h"
 #include "exec/tb-flush.h"
+#include "elf.h"
 #include "ui/input.h"
 #include "qom/object.h"
 #include "target/mips/internal.h"
@@ -67,6 +68,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_ASD_SKIP        0x200ULL
 #define SF2000_ASD_LOAD_BASE   0x00000200ULL
 #define SF2000_ASD_ENTRY       0x80001000ULL
+#define SF2000_LINUX_DTB_ALIGN (64 * KiB)
 #define SF2000_BL_INFO_MAGIC_ADDR 0x00000010ULL
 #define SF2000_BL_INFO_PTR_ADDR   0x00000014ULL
 #define SF2000_BL_INFO_DATA_ADDR  0x00000100ULL
@@ -365,6 +367,8 @@ static uint64_t sf2000_cpu_hz(void)
 static struct {
     const char *kernel_filename;
     uint64_t kernel_entry;
+    uint64_t dtb_vaddr;
+    bool linux_elf;
 } loaderparams;
 
 typedef struct SF2000RegState {
@@ -3736,6 +3740,8 @@ static void sf2000_load_asd(MachineState *machine)
 
     loaderparams.kernel_filename = machine->kernel_filename;
     loaderparams.kernel_entry = SF2000_ASD_ENTRY;
+    loaderparams.dtb_vaddr = 0;
+    loaderparams.linux_elf = false;
 
     if (!machine->kernel_filename) {
         return;
@@ -3766,6 +3772,86 @@ static void sf2000_load_asd(MachineState *machine)
                 size, (uint64_t)SF2000_ASD_LOAD_BASE,
                 (uint64_t)SF2000_ASD_SKIP,
                 (uint64_t)SF2000_ASD_ENTRY, machine->kernel_filename);
+}
+
+static bool sf2000_try_load_linux_elf(MachineState *machine)
+{
+    uint64_t kernel_entry = 0;
+    uint64_t kernel_high = 0;
+    uint64_t kernel_low = 0;
+    ssize_t kernel_size;
+    hwaddr dtb_paddr;
+    hwaddr dtb_vaddr;
+    void *dtb;
+    g_autofree char *dtb_contents = NULL;
+    gsize dtb_size;
+    GError *err = NULL;
+
+    if (!machine->kernel_filename) {
+        return false;
+    }
+
+    kernel_size = load_elf(machine->kernel_filename, NULL,
+                           cpu_mips_kseg0_to_phys, NULL,
+                           &kernel_entry, &kernel_low, &kernel_high,
+                           NULL, ELFDATA2LSB, EM_MIPS, 1, 0);
+    if (kernel_size == ELF_LOAD_NOT_ELF) {
+        return false;
+    }
+    if (kernel_size < 0) {
+        error_report("sf2000: failed to load Linux ELF '%s': %s",
+                     machine->kernel_filename, load_elf_strerror(kernel_size));
+        exit(1);
+    }
+    if (!machine->dtb) {
+        error_report("sf2000: Linux ELF boot requires -dtb");
+        exit(1);
+    }
+
+    if (!g_file_get_contents(machine->dtb, &dtb_contents, &dtb_size, &err)) {
+        error_report("sf2000: failed to load DTB '%s'", machine->dtb);
+        if (err) {
+            error_report("%s", err->message);
+            g_error_free(err);
+        }
+        exit(1);
+    }
+
+    dtb = g_memdup2(dtb_contents, dtb_size);
+    dtb_paddr = QEMU_ALIGN_UP(kernel_high, SF2000_LINUX_DTB_ALIGN);
+    if (dtb_paddr + dtb_size > machine->ram_size) {
+        error_report("sf2000: no RAM left for DTB at 0x%08" HWADDR_PRIx,
+                     dtb_paddr);
+        g_free(dtb);
+        exit(1);
+    }
+    dtb_vaddr = cpu_mips_phys_to_kseg0(NULL, dtb_paddr);
+
+    machine->fdt = dtb;
+    rom_add_blob_fixed("sf2000.dtb", dtb, dtb_size, dtb_paddr);
+
+    loaderparams.kernel_filename = machine->kernel_filename;
+    loaderparams.kernel_entry = kernel_entry;
+    loaderparams.dtb_vaddr = dtb_vaddr;
+    loaderparams.linux_elf = true;
+
+    info_report("sf2000: loaded Linux ELF %" PRId64
+                " bytes low=0x%08" PRIx64 " high=0x%08" PRIx64
+                " entry=0x%08" PRIx64 " dtb=0x%08" HWADDR_PRIx
+                " from %s",
+                (int64_t)kernel_size, kernel_low, kernel_high, kernel_entry,
+                dtb_paddr, machine->kernel_filename);
+    return true;
+}
+
+static void sf2000_load_kernel(MachineState *machine)
+{
+    if (!machine->kernel_filename) {
+        return;
+    }
+    if (!sf2000_try_load_linux_elf(machine)) {
+        sf2000_load_asd(machine);
+    }
 }
 
 static void sf2000_seed_boot_handoff(void)
@@ -3803,6 +3889,12 @@ static void sf2000_cpu_reset(void *opaque)
 
     if (loaderparams.kernel_filename) {
         env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
+        if (loaderparams.linux_elf) {
+            env->active_tc.gpr[4] = -2;
+            env->active_tc.gpr[5] = loaderparams.dtb_vaddr;
+            env->active_tc.gpr[6] = 0;
+            env->active_tc.gpr[7] = 0;
+        }
         env->active_tc.PC = loaderparams.kernel_entry;
     } else if (sf2000_bootrom_ram_entry) {
         env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
@@ -3885,7 +3977,7 @@ static void sf2000_init(MachineState *machine)
     }
 
     sf2000_load_bootrom(machine, sysmem);
-    sf2000_load_asd(machine);
+    sf2000_load_kernel(machine);
 
     /* MIPS reset starts from 0xbfc00000, which maps to physical 0x1fc00000. */
 }

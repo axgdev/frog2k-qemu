@@ -303,6 +303,27 @@ make run-vnc SD_IMAGE=/path/to/sd.img
 make boot-stock-asd SD_IMAGE=/path/to/sd.img
 ```
 
+## Boot Linux Directly
+
+For open-SDK and Linux bring-up, the machine can also boot a MIPS Linux ELF
+kernel directly with a DTB instead of wrapping the kernel in an ASD image:
+
+```sh
+make smoke-linux-elf
+make boot-linux-elf
+```
+
+The defaults point at the sibling `sf2000_linux` build output. Override them
+when testing another tree:
+
+```sh
+make boot-linux-elf LINUX_ELF=/path/to/vmlinux LINUX_DTB=/path/to/sf2000.dtb
+```
+
+Direct Linux boot passes the DTB pointer through the normal MIPS firmware
+argument registers. ASD boot remains available for testing the stock bootloader
+handoff path and SD-card update packaging.
+
 ## Capture Frames and Video
 
 For a stock vanilla UI frame sequence:

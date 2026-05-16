@@ -32,6 +32,8 @@ FIRMWARE_ORIGINAL ?= $(FIRMWARE_DIR)/SF2000_XMC_XM25QH40B_4mbit.bin
 FIRMWARE ?= $(FIRMWARE_BUGFIX)
 ASD ?= $(FIRMWARE_DIR)/bisrv_08_03.asd
 GB300_ASD ?= /root/host-frogdev/universal/sf2000_gb300_multicore_private/bisrv_gb300_v2.asd
+LINUX_ELF ?= /root/host-frogdev/universal/sf2000_linux/build/linux-sf2000-buildroot/vmlinux
+LINUX_DTB ?= /root/host-frogdev/universal/sf2000_linux/build/sf2000.dtb
 GDB ?= /opt/gdb-mips-toolchain/bin/mipsel-mti-elf-gdb
 VNC ?= 127.0.0.1:1
 LOG ?= build/logs/sf2000.log
@@ -48,7 +50,7 @@ SD_ARGS = $(if $(SD_IMAGE),-drive if=none,id=sd0,file=$(SD_IMAGE),format=raw,)
 
 -include config.mk
 
-.PHONY: all help deps build-info check-firmware check-bugfix-firmware check-asd check-gb300-asd ccache-stats ccache-zero fetch patch configure build vanilla-sd run-vnc run-vnc-vanilla run-headless boot-stock-asd boot-gb300-asd debug capture-stock-ui capture-vanilla-ui capture-vanilla-video smoke smoke-input smoke-stock-bootloader smoke-stock-full smoke-stock-full-bugfix smoke-stock-full-vanilla smoke-stock-full-fat16 smoke-stock-asd smoke-stock-fatfs smoke-stock-display smoke-gb300-asd smoke-gb300-fatfs smoke-gb300-display clean distclean
+.PHONY: all help deps build-info check-firmware check-bugfix-firmware check-asd check-gb300-asd check-linux-elf ccache-stats ccache-zero fetch patch configure build vanilla-sd run-vnc run-vnc-vanilla run-headless boot-stock-asd boot-gb300-asd boot-linux-elf debug capture-stock-ui capture-vanilla-ui capture-vanilla-video smoke smoke-input smoke-linux-elf smoke-stock-bootloader smoke-stock-full smoke-stock-full-bugfix smoke-stock-full-vanilla smoke-stock-full-fat16 smoke-stock-asd smoke-stock-fatfs smoke-stock-display smoke-gb300-asd smoke-gb300-fatfs smoke-gb300-display clean distclean
 
 all: build
 
@@ -72,6 +74,7 @@ help:
 		'  make smoke-stock-display verify stock ASD drives GMA scanout' \
 		'  make smoke-gb300-fatfs verify direct GB300 ASD reaches SD/FatFs mount' \
 		'  make smoke-gb300-display verify direct GB300 ASD drives GMA scanout' \
+		'  make smoke-linux-elf verify direct Linux ELF + DTB boot reaches /init' \
 		'  make run-vnc       run with VNC display, default 127.0.0.1:5901' \
 		'  make run-vnc SD_IMAGE=/path/sd.img attach a raw SD-card image' \
 		'  make run-vnc-vanilla run stock UI with generated vanilla SD image' \
@@ -81,6 +84,7 @@ help:
 		'  make vanilla-sd    build a generated FAT32 image from the vanilla OS zip' \
 		'  make boot-stock-asd run stock boot ROM plus direct stock ASD load' \
 		'  make boot-gb300-asd run stock boot ROM plus direct GB300 ASD load' \
+		'  make boot-linux-elf run direct Linux ELF + DTB boot' \
 		'  make debug         run paused with GDB stub on :1234' \
 		'  make gdb           connect mipsel-mti-elf-gdb to :1234' \
 		'  make clean         remove QEMU build directory only' \
@@ -107,6 +111,8 @@ build-info:
 	@printf 'original firmware: %s\n' '$(FIRMWARE_ORIGINAL)'
 	@printf 'asd: %s\n' '$(ASD)'
 	@printf 'gb300 asd: %s\n' '$(GB300_ASD)'
+	@printf 'linux elf: %s\n' '$(LINUX_ELF)'
+	@printf 'linux dtb: %s\n' '$(LINUX_DTB)'
 
 check-firmware:
 	@test -f '$(FIRMWARE)' || { \
@@ -133,6 +139,18 @@ check-gb300-asd:
 	@test -f '$(GB300_ASD)' || { \
 		printf 'missing GB300_ASD: %s\n' '$(GB300_ASD)' >&2; \
 		printf 'set it with: make <target> GB300_ASD=/path/to/bisrv_gb300_v2.asd\n' >&2; \
+		exit 1; \
+	}
+
+check-linux-elf:
+	@test -f '$(LINUX_ELF)' || { \
+		printf 'missing LINUX_ELF: %s\n' '$(LINUX_ELF)' >&2; \
+		printf 'build sf2000_linux or set it with: make <target> LINUX_ELF=/path/to/vmlinux\n' >&2; \
+		exit 1; \
+	}
+	@test -f '$(LINUX_DTB)' || { \
+		printf 'missing LINUX_DTB: %s\n' '$(LINUX_DTB)' >&2; \
+		printf 'build sf2000_linux or set it with: make <target> LINUX_DTB=/path/to/sf2000.dtb\n' >&2; \
 		exit 1; \
 	}
 
@@ -247,6 +265,13 @@ boot-gb300-asd: build check-firmware check-gb300-asd
 		-serial none -monitor stdio \
 		-d guest_errors,unimp -D $(LOG)
 
+boot-linux-elf: build check-linux-elf
+	mkdir -p $(dir $(LOG))
+	$(QEMU_BIN) -M sf2000 -cpu 4Kc -kernel $(LINUX_ELF) -dtb $(LINUX_DTB) \
+		-display vnc=$(VNC) \
+		-serial none -monitor stdio \
+		-d guest_errors,unimp -D $(LOG)
+
 capture-stock-ui: build $(STOCK_SD_IMAGE)
 	mkdir -p $(dir $(LOG)) $(dir $(SCREENSHOT)) $(GMA_DUMP_DIR)
 	(sleep $(CAPTURE_DELAY); printf 'screendump %s\n' '$(SCREENSHOT)'; \
@@ -330,6 +355,17 @@ smoke-input: build
 		> build/logs/smoke-input.console 2>&1
 	grep -q 'sf2000: key qcode=right down=1' build/logs/smoke-input.log
 	grep -q 'sf2000: key qcode=x down=1' build/logs/smoke-input.log
+
+smoke-linux-elf: build check-linux-elf
+	mkdir -p build/logs
+	timeout 90s $(QEMU_BIN) -M sf2000 -cpu 4Kc \
+		-kernel $(LINUX_ELF) -dtb $(LINUX_DTB) \
+		-display none -serial none -monitor none \
+		-d guest_errors,unimp -D build/logs/smoke-linux-elf.log \
+		> build/logs/smoke-linux-elf.console 2>&1 || test $$? -eq 124
+	grep -q 'sf2000: loaded Linux ELF' build/logs/smoke-linux-elf.console
+	grep -q 'sf2000: uart: .*Linux version' build/logs/smoke-linux-elf.log
+	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry' build/logs/smoke-linux-elf.log
 
 smoke-stock-bootloader: build
 	mkdir -p build/logs
