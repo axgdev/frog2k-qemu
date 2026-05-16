@@ -2171,27 +2171,39 @@ static bool sf2000_sdio_dma_read_image_bulk(uint32_t lba, uint32_t len,
                                             uint32_t *copied,
                                             MemTxResult *result)
 {
-    g_autofree uint8_t *buf = NULL;
+    dma_addr_t map_len = len;
+    void *buf;
     int ret;
 
     if (!sf2000_sdio_blk || !len) {
         return false;
     }
 
-    buf = g_malloc(len);
+    buf = dma_memory_map(&address_space_memory, sf2000_sdio_dma_addr,
+                         &map_len, DMA_DIRECTION_FROM_DEVICE,
+                         MEMTXATTRS_UNSPECIFIED);
+    if (!buf || map_len != len) {
+        if (buf) {
+            dma_memory_unmap(&address_space_memory, buf, map_len,
+                             DMA_DIRECTION_FROM_DEVICE, 0);
+        }
+        return false;
+    }
+
     ret = blk_pread(sf2000_sdio_blk, (int64_t)lba * 512, len, buf, 0);
     if (ret < 0) {
+        dma_memory_unmap(&address_space_memory, buf, map_len,
+                         DMA_DIRECTION_FROM_DEVICE, 0);
         qemu_log_mask(LOG_UNIMP,
                       "sf2000: sdio-read-image-bulk-fallback lba=%u len=%u ret=%d\n",
                       lba, len, ret);
         return false;
     }
 
-    *result = dma_memory_write(&address_space_memory, sf2000_sdio_dma_addr,
-                               buf, len, MEMTXATTRS_UNSPECIFIED);
-    if (*result == MEMTX_OK) {
-        *copied = len;
-    }
+    dma_memory_unmap(&address_space_memory, buf, map_len,
+                     DMA_DIRECTION_FROM_DEVICE, len);
+    *result = MEMTX_OK;
+    *copied = len;
     return true;
 }
 
@@ -2250,22 +2262,32 @@ static bool sf2000_sdio_dma_write_image_bulk(uint32_t lba, uint32_t len,
                                              MemTxResult *dma_result,
                                              int *blk_result)
 {
-    g_autofree uint8_t *buf = NULL;
+    dma_addr_t map_len = len;
+    void *buf;
 
     if (!sf2000_sdio_blk || !len || (len & 511u)) {
         return false;
     }
 
-    buf = g_malloc(len);
-    *dma_result = dma_memory_read(&address_space_memory, sf2000_sdio_dma_addr,
-                                  buf, len, MEMTXATTRS_UNSPECIFIED);
-    if (*dma_result != MEMTX_OK) {
-        return true;
+    buf = dma_memory_map(&address_space_memory, sf2000_sdio_dma_addr,
+                         &map_len, DMA_DIRECTION_TO_DEVICE,
+                         MEMTXATTRS_UNSPECIFIED);
+    if (!buf || map_len != len) {
+        if (buf) {
+            dma_memory_unmap(&address_space_memory, buf, map_len,
+                             DMA_DIRECTION_TO_DEVICE, 0);
+        }
+        return false;
     }
 
     *blk_result = blk_pwrite(sf2000_sdio_blk, (int64_t)lba * 512, len, buf, 0);
+    dma_memory_unmap(&address_space_memory, buf, map_len,
+                     DMA_DIRECTION_TO_DEVICE, len);
     if (*blk_result >= 0) {
+        *dma_result = MEMTX_OK;
         *copied = len;
+    } else {
+        *dma_result = MEMTX_ERROR;
     }
     return true;
 }
