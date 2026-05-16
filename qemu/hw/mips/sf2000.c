@@ -27,6 +27,7 @@
 #include "system/block-backend-global-state.h"
 #include "system/blockdev.h"
 #include "system/reset.h"
+#include "system/runstate.h"
 #include "system/dma.h"
 #include "exec/tb-flush.h"
 #include "elf.h"
@@ -394,6 +395,9 @@ static int64_t sf2000_next_vsync_ns;
 static uint32_t sf2000_irq_enable1;
 static uint32_t sf2000_irq_enable2;
 static uint32_t sf2000_adc_ctrl[4];
+static QEMUTimer *sf2000_wdt_timer;
+static uint32_t sf2000_wdt_count;
+static uint8_t sf2000_wdt_conf;
 static uint8_t sf2000_bootrom_bytes[SF2000_BOOT_SIZE];
 static QEMUTimer *sf2000_irq_poll_timer;
 static bool sf2000_bootrom_ram_entry;
@@ -1885,6 +1889,55 @@ static bool sf2000_wdt_decode(hwaddr full_addr)
            full_addr < SF2000_WDT_BASE + SF2000_WDT_SIZE;
 }
 
+static int64_t sf2000_wdt_timeout_ns(void)
+{
+    const char *env = g_getenv("SF2000_WDT_TIMEOUT_MS");
+    uint64_t ms = 20000;
+
+    if (env && *env) {
+        char *end = NULL;
+        uint64_t parsed = g_ascii_strtoull(env, &end, 0);
+
+        if (end && *end == '\0' && parsed > 0) {
+            ms = parsed;
+        }
+    }
+
+    return ms * SCALE_MS;
+}
+
+static void sf2000_wdt_timer_cb(void *opaque)
+{
+    (void)opaque;
+
+    if (!sf2000_wdt_conf) {
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP, "sf2000: watchdog timeout reset\n");
+    qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+}
+
+static void sf2000_wdt_arm(void)
+{
+    if (!sf2000_wdt_timer) {
+        return;
+    }
+
+    timer_mod(sf2000_wdt_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              sf2000_wdt_timeout_ns());
+}
+
+static void sf2000_wdt_disable(void)
+{
+    sf2000_wdt_conf = 0;
+    if (sf2000_wdt_timer) {
+        timer_del(sf2000_wdt_timer);
+    }
+    qemu_log_mask(LOG_UNIMP, "sf2000: watchdog disabled\n");
+}
+
 static void sf2000_uart_put(unsigned index, uint8_t ch)
 {
     if (ch == '\r') {
@@ -2980,8 +3033,27 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             sf2000_adc_ctrl[0] &= ~BIT(8);
         }
     } else if (sf2000_wdt_decode(full_addr)) {
-        if ((full_addr & 0xff) == 0x04 && value == 0) {
-            qemu_log_mask(LOG_UNIMP, "sf2000: watchdog disabled\n");
+        unsigned wdt_offset = full_addr & 0xff;
+
+        if (wdt_offset == 0x00) {
+            sf2000_wdt_count = value;
+            if (sf2000_wdt_conf) {
+                sf2000_wdt_arm();
+            }
+        } else if (wdt_offset == 0x04) {
+            sf2000_wdt_conf = value & 0xff;
+            if (!sf2000_wdt_conf) {
+                sf2000_wdt_disable();
+            } else if (sf2000_wdt_count >= 0xffff0000u) {
+                qemu_log_mask(LOG_UNIMP,
+                              "sf2000: watchdog reboot requested\n");
+                qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+            } else {
+                qemu_log_mask(LOG_UNIMP,
+                              "sf2000: watchdog armed conf=0x%02x\n",
+                              sf2000_wdt_conf);
+                sf2000_wdt_arm();
+            }
         }
     } else if (full_addr == SF2000_IRQ_STATUS1 && (value & SF2000_SDIO_IRQ)) {
         sf2000_sdio_irq_pending = false;
@@ -3885,6 +3957,9 @@ static void sf2000_cpu_reset(void *opaque)
     MIPSCPU *cpu = opaque;
     CPUMIPSState *env = &cpu->env;
 
+    sf2000_wdt_count = 0;
+    sf2000_wdt_disable();
+
     cpu_reset(CPU(cpu));
 
     if (loaderparams.kernel_filename) {
@@ -3938,6 +4013,8 @@ static void sf2000_init(MachineState *machine)
     sf2000_i2c_ier[0] = 0x00;
     sf2000_i2c_isr1[0] = 0x00;
     sf2000_i2c_ier1[0] = 0x00;
+    sf2000_wdt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                    sf2000_wdt_timer_cb, NULL);
     sf2000_timer_ack();
     sf2000_next_vsync_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                            NANOSECONDS_PER_SECOND / 60;
@@ -3971,6 +4048,13 @@ static void sf2000_init(MachineState *machine)
         sf2000_sdio_blk = blk_by_legacy_dinfo(dinfo);
     }
     if (sf2000_sdio_blk) {
+        int ret = blk_set_perm(sf2000_sdio_blk,
+                               BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE,
+                               BLK_PERM_ALL, &error_fatal);
+
+        if (ret < 0) {
+            exit(1);
+        }
         info_report("sf2000: using SD image '%s'", blk_name(sf2000_sdio_blk));
     } else {
         info_report("sf2000: no SD image supplied; using synthetic FAT probe media");

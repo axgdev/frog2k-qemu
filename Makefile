@@ -34,6 +34,7 @@ ASD ?= $(FIRMWARE_DIR)/bisrv_08_03.asd
 GB300_ASD ?= /root/host-frogdev/universal/sf2000_gb300_multicore_private/bisrv_gb300_v2.asd
 LINUX_ELF ?= /root/host-frogdev/universal/sf2000_linux/build/linux-sf2000-buildroot/vmlinux
 LINUX_DTB ?= /root/host-frogdev/universal/sf2000_linux/build/sf2000.dtb
+LINUX_ROM_SD_IMAGE ?= /root/host-frogdev/universal/sf2000_linux/build/sf2000-linux-buildroot-rom.sd.img
 GDB ?= /opt/gdb-mips-toolchain/bin/mipsel-mti-elf-gdb
 VNC ?= 127.0.0.1:1
 LOG ?= build/logs/sf2000.log
@@ -50,7 +51,7 @@ SD_ARGS = $(if $(SD_IMAGE),-drive if=none,id=sd0,file=$(SD_IMAGE),format=raw,)
 
 -include config.mk
 
-.PHONY: all help deps build-info check-firmware check-bugfix-firmware check-asd check-gb300-asd check-linux-elf ccache-stats ccache-zero fetch patch configure build vanilla-sd run-vnc run-vnc-vanilla run-headless boot-stock-asd boot-gb300-asd boot-linux-elf debug capture-stock-ui capture-vanilla-ui capture-vanilla-video smoke smoke-input smoke-linux-elf smoke-stock-bootloader smoke-stock-full smoke-stock-full-bugfix smoke-stock-full-vanilla smoke-stock-full-fat16 smoke-stock-asd smoke-stock-fatfs smoke-stock-display smoke-gb300-asd smoke-gb300-fatfs smoke-gb300-display clean distclean
+.PHONY: all help deps build-info check-firmware check-bugfix-firmware check-asd check-gb300-asd check-linux-elf check-linux-rom-sd ccache-stats ccache-zero fetch patch configure build vanilla-sd run-vnc run-vnc-vanilla run-headless boot-stock-asd boot-gb300-asd boot-linux-elf debug capture-stock-ui capture-vanilla-ui capture-vanilla-video smoke smoke-input smoke-linux-elf smoke-linux-reboot smoke-stock-bootloader smoke-stock-full smoke-stock-full-bugfix smoke-stock-full-vanilla smoke-stock-full-fat16 smoke-stock-asd smoke-stock-fatfs smoke-stock-display smoke-gb300-asd smoke-gb300-fatfs smoke-gb300-display clean distclean
 
 all: build
 
@@ -75,6 +76,7 @@ help:
 		'  make smoke-gb300-fatfs verify direct GB300 ASD reaches SD/FatFs mount' \
 		'  make smoke-gb300-display verify direct GB300 ASD drives GMA scanout' \
 		'  make smoke-linux-elf verify direct Linux ELF + DTB boot reaches /init' \
+		'  make smoke-linux-reboot verify Linux watchdog reboot through stock bootloader' \
 		'  make run-vnc       run with VNC display, default 127.0.0.1:5901' \
 		'  make run-vnc SD_IMAGE=/path/sd.img attach a raw SD-card image' \
 		'  make run-vnc-vanilla run stock UI with generated vanilla SD image' \
@@ -113,6 +115,7 @@ build-info:
 	@printf 'gb300 asd: %s\n' '$(GB300_ASD)'
 	@printf 'linux elf: %s\n' '$(LINUX_ELF)'
 	@printf 'linux dtb: %s\n' '$(LINUX_DTB)'
+	@printf 'linux rom sd image: %s\n' '$(LINUX_ROM_SD_IMAGE)'
 
 check-firmware:
 	@test -f '$(FIRMWARE)' || { \
@@ -151,6 +154,13 @@ check-linux-elf:
 	@test -f '$(LINUX_DTB)' || { \
 		printf 'missing LINUX_DTB: %s\n' '$(LINUX_DTB)' >&2; \
 		printf 'build sf2000_linux or set it with: make <target> LINUX_DTB=/path/to/sf2000.dtb\n' >&2; \
+		exit 1; \
+	}
+
+check-linux-rom-sd:
+	@test -f '$(LINUX_ROM_SD_IMAGE)' || { \
+		printf 'missing LINUX_ROM_SD_IMAGE: %s\n' '$(LINUX_ROM_SD_IMAGE)' >&2; \
+		printf 'build sf2000_linux linux-buildroot-rom-sd or set it with: make <target> LINUX_ROM_SD_IMAGE=/path/to/sd.img\n' >&2; \
 		exit 1; \
 	}
 
@@ -366,6 +376,20 @@ smoke-linux-elf: build check-linux-elf
 	grep -q 'sf2000: loaded Linux ELF' build/logs/smoke-linux-elf.console
 	grep -q 'sf2000: uart: .*Linux version' build/logs/smoke-linux-elf.log
 	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry' build/logs/smoke-linux-elf.log
+
+smoke-linux-reboot: build check-bugfix-firmware check-linux-rom-sd
+	mkdir -p build/logs
+	(sleep 45; printf 'sendkey backspace 1000\n'; sleep 15; \
+		printf 'quit\n') | \
+		$(QEMU_BIN) -M sf2000 -bios $(FIRMWARE_BUGFIX) \
+		-drive if=none,id=sd0,file=$(LINUX_ROM_SD_IMAGE),format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D build/logs/smoke-linux-reboot.log \
+		> build/logs/smoke-linux-reboot.console 2>&1
+	grep -q 'sf2000-screen: SELECT pressed, restarting' build/logs/smoke-linux-reboot.log
+	grep -q 'sf2000-screen: direct watchdog reset' build/logs/smoke-linux-reboot.log
+	grep -q 'sf2000: watchdog reboot requested' build/logs/smoke-linux-reboot.log
+	test "$$(grep -c 'sf2000: uart:  Hichip Bootloader' build/logs/smoke-linux-reboot.log)" -ge 2
 
 smoke-stock-bootloader: build
 	mkdir -p build/logs

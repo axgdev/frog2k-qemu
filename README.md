@@ -324,6 +324,17 @@ Direct Linux boot passes the DTB pointer through the normal MIPS firmware
 argument registers. ASD boot remains available for testing the stock bootloader
 handoff path and SD-card update packaging.
 
+The watchdog reboot path is covered separately because it needs the stock
+bootloader plus an SD image containing the Linux ASD:
+
+```sh
+make smoke-linux-reboot
+```
+
+That target defaults to the sibling `sf2000_linux` generated ROM SD image and
+verifies that a Linux userspace SELECT-triggered reboot reaches the bootloader
+again. Override `LINUX_ROM_SD_IMAGE=/path/to/sd.img` for another image.
+
 ## Capture Frames and Video
 
 For a stock vanilla UI frame sequence:
