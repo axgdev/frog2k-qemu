@@ -59,6 +59,8 @@ The next work should focus on the pieces that still prevent QEMU from being a
 strong oracle:
 
 - higher-fidelity display timing and panel readback;
+- writable storage semantics, including mirrored FAT updates and MMC ioctl
+  write paths;
 - audio and amplifier routing;
 - USB host and gadget behavior;
 - state capture or snapshots for skip-ahead testing;
