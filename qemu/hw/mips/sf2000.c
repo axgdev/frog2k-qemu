@@ -417,6 +417,7 @@ static bool sf2000_sdio_app_cmd;
 static uint8_t sf2000_sdio_bus_width;
 static bool sf2000_sb_timer_irq_masked;
 static BlockBackend *sf2000_sdio_blk;
+static GHashTable *sf2000_sdio_synth_sectors;
 static char sf2000_uart_line[2][256];
 static uint32_t sf2000_uart_line_len[2];
 static uint8_t sf2000_uart_ier[2];
@@ -2206,11 +2207,50 @@ static void sf2000_sdio_fill_sector(uint32_t lba, uint8_t sector[512])
     sector[511] = 0xaa;
 }
 
+static GHashTable *sf2000_sdio_synth_table(void)
+{
+    if (!sf2000_sdio_synth_sectors) {
+        sf2000_sdio_synth_sectors =
+            g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_free);
+    }
+    return sf2000_sdio_synth_sectors;
+}
+
+static bool sf2000_sdio_synth_read_sector(uint32_t lba, uint8_t sector[512])
+{
+    uint8_t *stored;
+
+    if (!sf2000_sdio_synth_sectors) {
+        return false;
+    }
+
+    stored = g_hash_table_lookup(sf2000_sdio_synth_sectors,
+                                 GUINT_TO_POINTER(lba));
+    if (stored) {
+        memcpy(sector, stored, 512);
+        return true;
+    }
+    return false;
+}
+
+static void sf2000_sdio_synth_write_sector(uint32_t lba,
+                                           const uint8_t sector[512])
+{
+    uint8_t *copy;
+
+    copy = g_memdup2(sector, 512);
+    g_hash_table_replace(sf2000_sdio_synth_table(), GUINT_TO_POINTER(lba),
+                         copy);
+}
+
 static bool sf2000_sdio_read_sector(uint32_t lba, uint8_t sector[512])
 {
     int ret;
 
     if (!sf2000_sdio_blk) {
+        if (sf2000_sdio_synth_read_sector(lba, sector)) {
+            return false;
+        }
         sf2000_sdio_fill_sector(lba, sector);
         return false;
     }
@@ -2388,6 +2428,8 @@ static void sf2000_sdio_dma_write(uint32_t lba)
             if (blk_result < 0) {
                 break;
             }
+        } else {
+            sf2000_sdio_synth_write_sector(lba + i, sector);
         }
         copied += chunk;
     }

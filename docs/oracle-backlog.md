@@ -26,8 +26,8 @@ Concrete QEMU implications:
 - keep raw `sd0` write-back paths working against a real image;
 - verify multi-sector DMA writes as well as single-block writes;
 - preserve mirrored FAT updates and `fsync`-style completion behavior;
-- consider whether the synthetic no-image fallback should gain a writable
-  sector cache for diagnostics that run without an attached raw image.
+- keep the synthetic no-image fallback writable so diagnostics can still
+  exercise storage-write paths without a raw image attached.
 
 ## Priority 2: Display Readback and Panel Identity
 
