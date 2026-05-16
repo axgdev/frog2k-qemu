@@ -409,6 +409,7 @@ static uint32_t sf2000_sdio_dma_addr;
 static uint32_t sf2000_sdio_dma_len;
 static bool sf2000_sdio_xfer_done;
 static bool sf2000_sdio_xfer_busy;
+static bool sf2000_sdio_write_active;
 static bool sf2000_sdio_irq_pending;
 static bool sf2000_sdio_callback_pending;
 static bool sf2000_sdio_app_cmd;
@@ -2298,6 +2299,7 @@ static void sf2000_sdio_dma_read(uint32_t lba)
 
     sf2000_sdio_xfer_done = true;
     sf2000_sdio_xfer_busy = false;
+    sf2000_sdio_write_active = false;
     sf2000_sdio_irq_pending = true;
     sf2000_sdio_callback_pending = true;
     /*
@@ -2390,6 +2392,7 @@ static void sf2000_sdio_dma_write(uint32_t lba)
 
     sf2000_sdio_xfer_done = true;
     sf2000_sdio_xfer_busy = false;
+    sf2000_sdio_write_active = true;
     sf2000_sdio_irq_pending = true;
     sf2000_sdio_callback_pending = true;
     if (sf2000_trace_sdio()) {
@@ -2847,11 +2850,13 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         }
     } else if (full_addr == 0x1884c001) {
         /*
-         * Stock sd_m33 helpers poll this byte until the data path reports the
-         * completed 0xe4 state. Return that terminal value once the emulated
-         * transfer has finished; otherwise leave it idle.
+         * Stock sd_m33 helpers poll this byte for the command/data state.
+         * Keep the idle value at zero, expose the vendor's write-ready state
+         * while a write transfer is active, and use the terminal 0xe4 value
+         * once the transfer has completed.
          */
-        value = sf2000_sdio_xfer_done ? 0xe4 : 0;
+        value = sf2000_sdio_write_active ? 0xed :
+                (sf2000_sdio_xfer_done ? 0xe4 : 0);
     } else if (full_addr == 0x1884c00b) {
         value = sf2000_sdio_xfer_done ? 0x0c : 0x09;
     } else if (full_addr == 0x1884c030) {
@@ -3132,17 +3137,21 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     } else if (full_addr == 0x1884c00b && (value & 0x04)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_write_active = false;
         sf2000_sdio_irq_pending = false;
     } else if (full_addr == 0x1884c030 && (value & 0x40)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_write_active = false;
         sf2000_sdio_irq_pending = false;
     } else if (full_addr == 0x1884c030 && (value & 1)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = true;
+        sf2000_sdio_write_active = false;
     } else if (full_addr == 0x1884c030 && (value & 0x20)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_write_active = false;
         sf2000_sdio_irq_pending = false;
     } else if (full_addr == 0x1884c000 && (value & 1)) {
         sf2000_sdio_complete_cmd();
