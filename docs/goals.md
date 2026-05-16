@@ -75,6 +75,8 @@ Use the following evidence when refining the model:
 - the sibling `sf2000_linux` repository and its commit history;
 - any direct hardware probes needed to separate common SoC behavior from
   board-specific routing.
+- the oracle backlog in `docs/oracle-backlog.md` for the current highest-value
+  gaps.
 
 ## Working Rule
 
