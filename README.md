@@ -26,6 +26,9 @@ On Alpine:
 apk add --no-cache curl meson samurai patch pkgconf glib-dev pixman-dev py3-pip py3-distlib
 ```
 
+The current reverse-engineering and cross-compilation baseline is recorded in
+[docs/installed.md](docs/installed.md).
+
 Optional tools for generated vanilla SD-card images and captures:
 
 ```sh
