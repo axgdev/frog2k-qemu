@@ -459,6 +459,8 @@ static int sf2000_trace_pc_enabled_cache = -1;
 static int sf2000_patch_security_enabled_cache = -1;
 static int sf2000_patch_archive_path_enabled_cache = -1;
 static int sf2000_patch_archive_access_enabled_cache = -1;
+static uint32_t sf2000_last_progress_seq;
+static bool sf2000_last_progress_valid;
 
 typedef struct SF2000KeyMap {
     QKeyCode qcode;
@@ -529,7 +531,32 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
     { 0x8035a794, 0x8035f97c, "run_game" },
     { 0x8035f97c, 0x80365c34, "unwqw_decompress" },
     { 0x80355770, 0x80355b50, "security_check" },
+    { 0x047c0050, 0x047d0000, "storage_probe" },
 };
+
+#define SF2000_PROGRESS_PHYS      0x013f0000ULL
+#define SF2000_PROGRESS_MAGIC     0x52504653U
+#define SF2000_PROGRESS_VERSION   1U
+#define SF2000_PROGRESS_ENTRIES   1024U
+#define SF2000_PROGRESS_NAME_LEN   32U
+
+typedef struct SF2000ProgressEntry {
+    uint32_t seq;
+    uint32_t kind;
+    uint32_t value;
+    uint32_t name_ptr;
+    char name[SF2000_PROGRESS_NAME_LEN];
+} SF2000ProgressEntry;
+
+typedef struct SF2000ProgressLog {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t seq;
+    uint32_t write_index;
+    uint32_t wrapped;
+    uint32_t reserved[3];
+    SF2000ProgressEntry entries[SF2000_PROGRESS_ENTRIES];
+} SF2000ProgressLog;
 
 static hwaddr sf2000_guest_phys_addr(uint32_t vaddr)
 {
@@ -703,6 +730,111 @@ static void sf2000_trace_pc_landmark(void)
                 (uint32_t)cpu->env.active_tc.gpr[29]);
     }
     sf2000_last_pc_landmark = NULL;
+}
+
+static bool sf2000_progress_read_u32(hwaddr addr, uint32_t *value)
+{
+    MemTxResult res;
+
+    *value = address_space_ldl_le(&address_space_memory, addr,
+                                  MEMTXATTRS_UNSPECIFIED, &res);
+    return res == MEMTX_OK;
+}
+
+static void sf2000_progress_read_name(hwaddr addr, char *buf, size_t len)
+{
+    MemTxResult res;
+    size_t i;
+
+    if (!len) {
+        return;
+    }
+
+    for (i = 0; i + 1 < len; i++) {
+        uint8_t ch = address_space_ldub(&address_space_memory, addr + i,
+                                        MEMTXATTRS_UNSPECIFIED, &res);
+
+        if (res != MEMTX_OK || ch == 0) {
+            break;
+        }
+        buf[i] = (ch < 0x20 || ch > 0x7e) ? '.' : (char)ch;
+    }
+    buf[i] = 0;
+}
+
+static void sf2000_trace_progress_log(void)
+{
+    hwaddr base = SF2000_PROGRESS_PHYS;
+    uint32_t magic;
+    uint32_t version;
+    uint32_t seq;
+    uint32_t write_index;
+    uint32_t wrapped;
+    uint32_t start_seq;
+    uint32_t end_seq;
+    uint32_t current_seq;
+    uint32_t slot;
+    uint32_t entry_seq;
+    uint32_t kind;
+    uint32_t value;
+    uint32_t name_ptr;
+    char name[SF2000_PROGRESS_NAME_LEN + 1];
+
+    if (!sf2000_progress_read_u32(base, &magic) ||
+        magic != SF2000_PROGRESS_MAGIC) {
+        sf2000_last_progress_valid = false;
+        return;
+    }
+    if (!sf2000_progress_read_u32(base + 4, &version) ||
+        version != SF2000_PROGRESS_VERSION ||
+        !sf2000_progress_read_u32(base + 8, &seq) ||
+        !sf2000_progress_read_u32(base + 12, &write_index) ||
+        !sf2000_progress_read_u32(base + 16, &wrapped)) {
+        return;
+    }
+    if (seq == 0) {
+        return;
+    }
+
+    start_seq = sf2000_last_progress_valid ? sf2000_last_progress_seq + 1u : 1u;
+    if (start_seq > seq) {
+        sf2000_last_progress_seq = seq;
+        sf2000_last_progress_valid = true;
+        return;
+    }
+
+    end_seq = seq;
+    if (end_seq - start_seq + 1u > SF2000_PROGRESS_ENTRIES) {
+        start_seq = end_seq - SF2000_PROGRESS_ENTRIES + 1u;
+    }
+
+    for (current_seq = start_seq; current_seq <= end_seq; current_seq++) {
+        uint32_t delta = end_seq - current_seq;
+        hwaddr entry_base;
+
+        if (write_index == 0) {
+            slot = SF2000_PROGRESS_ENTRIES - 1u - delta;
+        } else {
+            slot = write_index - 1u - delta;
+        }
+        slot %= SF2000_PROGRESS_ENTRIES;
+        entry_base = base + 0x20u + (hwaddr)slot * sizeof(SF2000ProgressEntry);
+
+        if (!sf2000_progress_read_u32(entry_base, &entry_seq) ||
+            !sf2000_progress_read_u32(entry_base + 4, &kind) ||
+            !sf2000_progress_read_u32(entry_base + 8, &value) ||
+            !sf2000_progress_read_u32(entry_base + 12, &name_ptr)) {
+            break;
+        }
+        (void)name_ptr;
+        sf2000_progress_read_name(entry_base + 16, name, sizeof(name));
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: storage-progress seq=%u wrapped=%u kind=0x%08x value=0x%08x name=%s\n",
+                      entry_seq, wrapped, kind, value, name);
+    }
+
+    sf2000_last_progress_seq = seq;
+    sf2000_last_progress_valid = true;
 }
 
 static uint32_t sf2000_timer_ticks(void)
@@ -1312,6 +1444,7 @@ static void sf2000_irq_poll_timer_cb(void *opaque)
     if (sf2000_trace_pc_enabled()) {
         sf2000_trace_pc_landmark();
     }
+    sf2000_trace_progress_log();
     if (sf2000_patch_security_enabled()) {
         sf2000_patch_stock_security_check();
     }
