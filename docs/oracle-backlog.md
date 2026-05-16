@@ -21,6 +21,11 @@ write tests and mirrored FAT updates after validating the geometry in
 read-only mode. That means QEMU should treat writable FAT behavior as part of
 the first-class storage oracle, not as a corner case.
 
+Current verification status: the existing buildroot ASD smoke reaches `/init`
+and the binfmt_flat handoff, but the captured log from the current run still
+does not show the storage-probe markers. A dedicated storage smoke or a longer
+run is still needed before this can be treated as fully exercised.
+
 Concrete QEMU implications:
 
 - keep raw `sd0` write-back paths working against a real image;
