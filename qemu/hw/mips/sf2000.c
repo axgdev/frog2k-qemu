@@ -2846,7 +2846,12 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
             value &= (1u << (size * 8)) - 1u;
         }
     } else if (full_addr == 0x1884c001) {
-        value = 0; /* SDIO command engine idle. */
+        /*
+         * Stock sd_m33 helpers poll this byte until the data path reports the
+         * completed 0xe4 state. Return that terminal value once the emulated
+         * transfer has finished; otherwise leave it idle.
+         */
+        value = sf2000_sdio_xfer_done ? 0xe4 : 0;
     } else if (full_addr == 0x1884c00b) {
         value = sf2000_sdio_xfer_done ? 0x0c : 0x09;
     } else if (full_addr == 0x1884c030) {
