@@ -1716,6 +1716,69 @@ static void sf2000_usb_reset_block_selftest(void)
                   usb1_power, usb1_devctl);
 }
 
+static void sf2000_usb_link_state_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered[2];
+    bool saved_active[2];
+    uint32_t value;
+    unsigned index;
+
+    for (index = 0; index < ARRAY_SIZE(saved_powered); index++) {
+        saved_powered[index] = sf2000_usb_link_powered[index];
+        saved_active[index] = sf2000_usb_link_active[index];
+    }
+
+    sf2000_usb_write(SF2000_USB0_BASE + 0x00, 0, 4);
+    sf2000_usb_write(SF2000_USB1_BASE + 0x00, 0, 4);
+    if (strcmp(sf2000_usb_link_state_name(0), "disconnected") != 0 ||
+        strcmp(sf2000_usb_link_state_name(1), "disconnected") != 0) {
+        error_report("sf2000: usb link state selftest failed board=%s reset->disconnected "
+                     "state0=%s state1=%s",
+                     profile->name,
+                     sf2000_usb_link_state_name(0),
+                     sf2000_usb_link_state_name(1));
+        goto restore;
+    }
+
+    sf2000_usb_write(SF2000_USB0_BASE + 0x60, SF2000_MUSB_DEVCTL_VBUS, 4);
+    sf2000_usb_write(SF2000_USB1_BASE + 0x60, SF2000_MUSB_DEVCTL_VBUS, 4);
+    if (strcmp(sf2000_usb_link_state_name(0), "powered-disconnected") != 0 ||
+        strcmp(sf2000_usb_link_state_name(1), "powered-disconnected") != 0) {
+        error_report("sf2000: usb link state selftest failed board=%s powered->shell "
+                     "state0=%s state1=%s",
+                     profile->name,
+                     sf2000_usb_link_state_name(0),
+                     sf2000_usb_link_state_name(1));
+        goto restore;
+    }
+
+    sf2000_usb_write(SF2000_USB0_BASE + 0x60,
+                     SF2000_MUSB_DEVCTL_VBUS | SF2000_MUSB_DEVCTL_SESSION, 4);
+    sf2000_usb_write(SF2000_USB1_BASE + 0x60,
+                     SF2000_MUSB_DEVCTL_VBUS | SF2000_MUSB_DEVCTL_SESSION, 4);
+    if (strcmp(sf2000_usb_link_state_name(0), "session-active") != 0 ||
+        strcmp(sf2000_usb_link_state_name(1), "session-active") != 0) {
+        error_report("sf2000: usb link state selftest failed board=%s session->active "
+                     "state0=%s state1=%s",
+                     profile->name,
+                     sf2000_usb_link_state_name(0),
+                     sf2000_usb_link_state_name(1));
+        goto restore;
+    }
+
+restore:
+    sf2000_usb_link_powered[0] = saved_powered[0];
+    sf2000_usb_link_powered[1] = saved_powered[1];
+    sf2000_usb_link_active[0] = saved_active[0];
+    sf2000_usb_link_active[1] = saved_active[1];
+    sf2000_mmio_get32(SF2000_USB0_BASE + 0x00, &value);
+    sf2000_mmio_get32(SF2000_USB1_BASE + 0x00, &value);
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: usb link state selftest ok board=%s\n",
+                  profile->name);
+}
+
 static bool sf2000_pwm_decode(hwaddr full_addr, unsigned *channel,
                               unsigned *offset)
 {
@@ -5294,6 +5357,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
     sf2000_usb_reset_block_selftest();
+    sf2000_usb_link_state_selftest();
     info_report("sf2000: board profile=%s panel=0x%08x audio=%s open=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u",
