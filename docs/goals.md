@@ -115,7 +115,9 @@ strong oracle:
   `usb1-phy384`, but that still only proves controller-state visibility rather
   than real enumeration or PHY negotiation;
   the boot snapshot now reads back `POWER=0x70` and `DEVCTL=0x99` so the
-  current contract matches the captured powered-disconnected shell at reset;
+  current contract matches the captured powered-disconnected shell at reset,
+  and the live devctl snapshot now also walks through `0x80` and `0x81` when
+  the link is driven through the probe-log powered/session transitions;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible

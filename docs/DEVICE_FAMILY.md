@@ -132,7 +132,10 @@ until a board selector is needed. The next modelable board differences are:
   controller state can be compared directly against the boot-time USB probe
   logs.
   The boot-time reset shell now reads back `0x70` for POWER and `0x99` for
-  DEVCTL, matching the captured powered-disconnected snapshot at init.
+  DEVCTL, matching the captured powered-disconnected snapshot at init; the
+  live devctl snapshot also steps through `0x80` and `0x81` when the model is
+  driven through the powered-disconnected and session-active transitions that
+  appear in the probe logs.
   The boot log now also self-tests the USB reset-block readback and the live
   UTMI/PHY snapshot against the captured powered-disconnected shell on both
   controllers.

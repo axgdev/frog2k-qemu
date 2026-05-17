@@ -94,7 +94,9 @@ is now queryable as `usb0-utmi380`, `usb1-utmi380`, `usb0-phy384`, and
 boot values, but that still only proves controller-state visibility rather
 than actual host/device negotiation. The boot-time reset shell now reads back
 `POWER=0x70` and `DEVCTL=0x99`, matching the captured powered-disconnected
-snapshot from the probe logs.
+snapshot from the probe logs, and the live devctl readback now steps through
+`0x80` and `0x81` for the powered-disconnected and session-active states seen
+in the probe history.
 
 ## Priority 4: Skip-Ahead Workflows
 

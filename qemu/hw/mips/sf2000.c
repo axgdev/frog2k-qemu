@@ -390,6 +390,8 @@ static uint32_t sf2000_audio_i2s_fade90;
 static bool sf2000_storage_selftest_raw;
 static bool sf2000_usb_link_powered[2];
 static bool sf2000_usb_link_active[2];
+static uint32_t sf2000_usb_power_reg[2];
+static uint32_t sf2000_usb_devctl_reg[2];
 static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
 static uint32_t sf2000_panel_sample_readback(SF2000LCDState *s,
                                              uint32_t value);
@@ -1838,8 +1840,7 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
      */
     switch (offset) {
     case 0x00: /* FAddr/Power byte lane. */
-        value = sf2000_usb_link_powered[index] ?
-            SF2000_MUSB_POWER_RESET_READ : SF2000_MUSB_POWER_OFF_READ;
+        value = sf2000_usb_power_reg[index];
         break;
     case 0x02: /* IntrTx */
     case 0x04: /* IntrRx */
@@ -1849,8 +1850,7 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
     case 0x0b: /* IntrUSBE */
     case 0x60: /* DevCtl */
         if (offset == 0x60) {
-            value = sf2000_usb_link_powered[index] ?
-                SF2000_MUSB_DEVCTL_RESET_READ : SF2000_MUSB_DEVCTL_OFF_READ;
+            value = sf2000_usb_devctl_reg[index];
         } else {
             value = sf2000_usb_link_active[index] ? 0x10 : 0;
         }
@@ -1896,12 +1896,17 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
 
         sf2000_usb_link_powered[index] = powered;
         sf2000_usb_link_active[index] = powered && active;
+        sf2000_usb_power_reg[index] = powered ? (uint32_t)value
+                                              : SF2000_MUSB_POWER_OFF_READ;
+        sf2000_usb_devctl_reg[index] = sf2000_usb_link_active[index] ?
+            0x81 : SF2000_MUSB_DEVCTL_OFF_READ;
     } else if (offset == 0x60) {
         bool powered = (value & SF2000_MUSB_DEVCTL_VBUS) != 0;
         bool active = (value & SF2000_MUSB_DEVCTL_SESSION) != 0;
 
         sf2000_usb_link_powered[index] = sf2000_usb_link_powered[index] || powered;
         sf2000_usb_link_active[index] = active;
+        sf2000_usb_devctl_reg[index] = active ? 0x81 : SF2000_MUSB_DEVCTL_OFF_READ;
     }
     if (!sf2000_usb_access_reported[index]) {
         sf2000_usb_access_reported[index] = true;
@@ -1950,19 +1955,36 @@ static void sf2000_usb_link_state_selftest(void)
     const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
     bool saved_powered[2];
     bool saved_active[2];
+    uint32_t saved_power_reg[2];
+    uint32_t saved_devctl_reg[2];
     uint32_t value;
     unsigned index;
 
     for (index = 0; index < ARRAY_SIZE(saved_powered); index++) {
         saved_powered[index] = sf2000_usb_link_powered[index];
         saved_active[index] = sf2000_usb_link_active[index];
+        saved_power_reg[index] = sf2000_usb_power_reg[index];
+        saved_devctl_reg[index] = sf2000_usb_devctl_reg[index];
     }
 
-    sf2000_usb_write(SF2000_USB0_BASE + 0x00, 0, 4);
-    sf2000_usb_write(SF2000_USB1_BASE + 0x00, 0, 4);
-    if (strcmp(sf2000_usb_link_state_name(0), "disconnected") != 0 ||
+    if (sf2000_usb_read(SF2000_USB0_BASE + 0x00, 4) != SF2000_MUSB_POWER_RESET_READ ||
+        sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_RESET_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x00, 4) != SF2000_MUSB_POWER_RESET_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_RESET_READ) {
+        error_report("sf2000: usb link state selftest failed board=%s reset snapshot mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    sf2000_usb_write(SF2000_USB0_BASE + 0x00, SF2000_MUSB_POWER_OFF_READ, 4);
+    sf2000_usb_write(SF2000_USB1_BASE + 0x00, SF2000_MUSB_POWER_OFF_READ, 4);
+    if (sf2000_usb_read(SF2000_USB0_BASE + 0x00, 4) != SF2000_MUSB_POWER_OFF_READ ||
+        sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_OFF_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x00, 4) != SF2000_MUSB_POWER_OFF_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_OFF_READ ||
+        strcmp(sf2000_usb_link_state_name(0), "disconnected") != 0 ||
         strcmp(sf2000_usb_link_state_name(1), "disconnected") != 0) {
-        error_report("sf2000: usb link state selftest failed board=%s reset->disconnected "
+        error_report("sf2000: usb link state selftest failed board=%s disconnected snapshot mismatch "
                      "state0=%s state1=%s",
                      profile->name,
                      sf2000_usb_link_state_name(0),
@@ -1972,7 +1994,9 @@ static void sf2000_usb_link_state_selftest(void)
 
     sf2000_usb_write(SF2000_USB0_BASE + 0x60, SF2000_MUSB_DEVCTL_VBUS, 4);
     sf2000_usb_write(SF2000_USB1_BASE + 0x60, SF2000_MUSB_DEVCTL_VBUS, 4);
-    if (strcmp(sf2000_usb_link_state_name(0), "powered-disconnected") != 0 ||
+    if (sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_OFF_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_OFF_READ ||
+        strcmp(sf2000_usb_link_state_name(0), "powered-disconnected") != 0 ||
         strcmp(sf2000_usb_link_state_name(1), "powered-disconnected") != 0) {
         error_report("sf2000: usb link state selftest failed board=%s powered->shell "
                      "state0=%s state1=%s",
@@ -1986,6 +2010,12 @@ static void sf2000_usb_link_state_selftest(void)
                      SF2000_MUSB_DEVCTL_VBUS | SF2000_MUSB_DEVCTL_SESSION, 4);
     sf2000_usb_write(SF2000_USB1_BASE + 0x60,
                      SF2000_MUSB_DEVCTL_VBUS | SF2000_MUSB_DEVCTL_SESSION, 4);
+    if (sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4) != 0x81 ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4) != 0x81) {
+        error_report("sf2000: usb link state selftest failed board=%s session snapshot mismatch",
+                     profile->name);
+        goto restore;
+    }
     if (strcmp(sf2000_usb_link_state_name(0), "session-active") != 0 ||
         strcmp(sf2000_usb_link_state_name(1), "session-active") != 0) {
         error_report("sf2000: usb link state selftest failed board=%s session->active "
@@ -2001,6 +2031,10 @@ restore:
     sf2000_usb_link_powered[1] = saved_powered[1];
     sf2000_usb_link_active[0] = saved_active[0];
     sf2000_usb_link_active[1] = saved_active[1];
+    sf2000_usb_power_reg[0] = saved_power_reg[0];
+    sf2000_usb_power_reg[1] = saved_power_reg[1];
+    sf2000_usb_devctl_reg[0] = saved_devctl_reg[0];
+    sf2000_usb_devctl_reg[1] = saved_devctl_reg[1];
     sf2000_mmio_get32(SF2000_USB0_BASE + 0x00, &value);
     sf2000_mmio_get32(SF2000_USB1_BASE + 0x00, &value);
     qemu_log_mask(LOG_UNIMP,
@@ -5871,6 +5905,10 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_powered[1] = true;
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
+    sf2000_usb_power_reg[0] = SF2000_MUSB_POWER_RESET_READ;
+    sf2000_usb_power_reg[1] = SF2000_MUSB_POWER_RESET_READ;
+    sf2000_usb_devctl_reg[0] = SF2000_MUSB_DEVCTL_RESET_READ;
+    sf2000_usb_devctl_reg[1] = SF2000_MUSB_DEVCTL_RESET_READ;
     sf2000_usb_regs[0][0x380 >> 2] = sf2000_board_profile_spec()->usb_utmi380;
     sf2000_usb_regs[1][0x380 >> 2] = sf2000_board_profile_spec()->usb_utmi380;
     sf2000_usb_regs[0][0x384 >> 2] = sf2000_board_profile_spec()->usb_phy384;
