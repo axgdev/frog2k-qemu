@@ -1948,6 +1948,46 @@ restore:
     sf2000_audio_set_backend_active();
 }
 
+static void sf2000_audio_gate_live_variant_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered = sf2000_audio_powered;
+    uint32_t saved_fade = sf2000_audio_i2s_fade90;
+    uint32_t gate_l1;
+    uint32_t gate_r1;
+
+    sf2000_audio_powered = false;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    if (gate_l1 != profile->audio_gate_l1 || gate_r1 != profile->audio_gate_r1) {
+        error_report("sf2000: audio gate live variant selftest failed board=%s reset mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    sf2000_audio_powered = true;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    if (gate_l1 != profile->audio_gate_l1_active ||
+        gate_r1 != profile->audio_gate_r1_active) {
+        error_report("sf2000: audio gate live variant selftest failed board=%s active mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio gate live variant selftest ok board=%s reset_l1=0x%08x reset_r1=0x%08x active_l1=0x%08x active_r1=0x%08x\n",
+                  profile->name, profile->audio_gate_l1, profile->audio_gate_r1,
+                  profile->audio_gate_l1_active, profile->audio_gate_r1_active);
+
+restore:
+    sf2000_audio_powered = saved_powered;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+}
+
 static bool sf2000_pwm_decode(hwaddr full_addr, unsigned *channel,
                               unsigned *offset)
 {
@@ -5527,6 +5567,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_active[1] = false;
     sf2000_audio_state_selftest();
     sf2000_audio_gate_live_selftest();
+    sf2000_audio_gate_live_variant_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
     g_autofree char *gate_live_l = sf2000_machine_audio_gate_l_live_get(NULL, NULL);

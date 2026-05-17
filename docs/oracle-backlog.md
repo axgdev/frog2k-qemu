@@ -133,8 +133,9 @@ The captured hardware logs show more than a DAC write:
     still only reflects the muted/open snapshot rather than a full analog
     implementation;
   - the live gate-word snapshot is now queryable as `audio-gate-l-live` and
-    `audio-gate-r-live`, but that still only captures the active-variant
-    contract and not the full analog chain;
+    `audio-gate-r-live`, and the boot selftest now checks the reset and
+    active variants, but that still only captures the active-variant contract
+    and not the full analog chain;
   - the boot-checked mute/power transition self-test now verifies the reset
   muted state before firmware runs, but it is still only a contract check and
   not a full analog implementation;
