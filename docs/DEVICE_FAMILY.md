@@ -90,6 +90,9 @@ until a board selector is needed. The next modelable board differences are:
   complete functional model. The boot log now also self-tests the audio
   mute/power transition so the reset-muted contract is checked before
   firmware runs.
+  The captured libretro-open return tuple is also exposed as
+  `audio-open-returns` so the open-path result that accompanies
+  `sf2000_left_only` stays visible in the contract.
   The baseline boot log now prints that audio contract, the gate route, and
   the USB topology in one line so the regression smoke can verify the board
   shape directly.

@@ -123,10 +123,13 @@ The captured hardware logs show more than a DAC write:
   `0x00000020/0x00000020`);
 - the observed `volume=75` / `gain=8` playback settings that accompany the
   audio-open path;
-- the observed mute gate that flips between `mute=0` during play and
+  - the observed mute gate that flips between `mute=0` during play and
   `mute=1` at stop, with the board coming up muted until the DAC/audio path
   is powered;
-- board-side mux state changes around mute/unmute and volume changes;
+  - the captured libretro-open return tuple (`volume_ret=-1`, `mute_ret=0`,
+    `silence_ret=0`, `start_ret=0`, `unmute_ret=0`, `output_ret=0`) that now
+    appears as a QMP-visible `audio-open-returns` property;
+  - board-side mux state changes around mute/unmute and volume changes;
 - the captured mux-open snapshot (`l22=0 l23=0 l24=0 l25=0 l26=0 l27=0
   l28=0 l29=0 r07=0`) that now appears as a QMP-visible `audio-mux`
   property;
