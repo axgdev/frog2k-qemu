@@ -22,12 +22,11 @@ read-only mode. That means QEMU should treat writable FAT behavior as part of
 the first-class storage oracle, not as a corner case.
 
 Current verification status: the current `rdinit=/usr/sbin/sf2000-storage-fastprobe`
-smoke reaches `probe begin`, but the probe cannot mount `devtmpfs`, `proc`, or
-`sysfs`, and it never sees a `/dev/mmcblk0` node materialize. The probe keeps
-printing `waiting mmc device` for 30 seconds and then exits at the same
-`open failed` / `sysfs dev open failed` point, so the remaining blocker is now
-an init-mount / device-node exposure problem rather than a probe-body readback
-problem.
+smoke now proves the HC15 host bind and early command path. The log shows
+`hc15-probe`, `HC15 SD/MMC host registered`, and the SDIO command-register
+writes at `0x1884c004` and `0x1884c002`. The remaining work is to keep those
+controller-level traces stable while deciding whether the initrd/device-node
+path should remain a separate smoke.
 
 Concrete QEMU implications:
 
