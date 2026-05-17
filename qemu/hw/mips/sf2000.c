@@ -224,6 +224,8 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t audio_periods;
     const char *usb0_route;
     const char *usb1_route;
+    const char *usb_root_hub_id;
+    uint32_t usb_root_hub_ports;
 } SF2000BoardProfileSpec;
 
 static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
@@ -239,6 +241,8 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_periods = 8,
         .usb0_route = "micro-usb",
         .usb1_route = "usb-a",
+        .usb_root_hub_id = "1d6b:0002",
+        .usb_root_hub_ports = 4,
     },
     {
         .name = "gb300",
@@ -252,6 +256,8 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_periods = 8,
         .usb0_route = "micro-usb",
         .usb1_route = "usb-a",
+        .usb_root_hub_id = "1d6b:0002",
+        .usb_root_hub_ports = 4,
     },
 };
 
@@ -348,6 +354,16 @@ static char *sf2000_machine_usb1_state_get(Object *obj, Error **errp)
     }
     return g_strdup(sf2000_usb_link_powered[1] ? "powered-disconnected"
                                                : "disconnected");
+}
+
+static char *sf2000_machine_usb_root_hub_id_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->usb_root_hub_id);
+}
+
+static char *sf2000_machine_usb_root_hub_ports_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->usb_root_hub_ports);
 }
 
 typedef struct SF2000RegDefault {
@@ -4542,6 +4558,10 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_usb0_route_get, NULL);
     object_class_property_add_str(oc, "usb1-route",
                                   sf2000_machine_usb1_route_get, NULL);
+    object_class_property_add_str(oc, "usb-root-hub-id",
+                                  sf2000_machine_usb_root_hub_id_get, NULL);
+    object_class_property_add_str(oc, "usb-root-hub-ports",
+                                  sf2000_machine_usb_root_hub_ports_get, NULL);
     object_class_property_add_str(oc, "usb0-state",
                                   sf2000_machine_usb0_state_get, NULL);
     object_class_property_add_str(oc, "usb1-state",

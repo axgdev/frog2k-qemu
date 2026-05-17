@@ -78,6 +78,9 @@ until a board selector is needed. The next modelable board differences are:
   read-only properties alongside the route labels, so controller link state
   is queryable as `disconnected`, `powered-disconnected`, or
   `session-active` even though downstream enumeration is still not modeled.
+  The root hub shape is also exposed as read-only `usb-root-hub-id` and
+  `usb-root-hub-ports` properties so the observed bus topology can be matched
+  against probe logs.
 
 ## Current GB300 Boot Status
 

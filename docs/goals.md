@@ -83,7 +83,8 @@ strong oracle:
   downstream host/device enumeration or any PHY-specific quirks, so this
   remains a board-behavior problem rather than a completed host oracle, even
   though the machine now exposes read-only USB link-state properties that
-  distinguish disconnected, powered-disconnected, and session-active states;
+  distinguish disconnected, powered-disconnected, and session-active states,
+  plus root-hub identity/port-count metadata;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible
