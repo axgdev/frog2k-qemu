@@ -47,6 +47,7 @@ The repository already has useful validation checkpoints:
 - `make smoke-linux-buildroot-reset-snapshot`
 - `make smoke-linux-buildroot-reset-restore`
 - `make -C ../sf2000_linux smoke-qemu-stock-fatfs-writeback`
+- `make -C ../sf2000_linux smoke-qemu-display`
 
 These targets establish the current baseline for:
 
@@ -71,6 +72,9 @@ These targets establish the current baseline for:
   image writeback smoke, so the default storage regression path can exercise
   the stronger emulator-side oracle even while the direct guest probe remains
   brittle.
+- the Linux-side display regression now delegates to the QEMU stock-display
+  and GB300-display smokes, so the Linux workspace can exercise the stronger
+  display oracle without replaying the guest-side panel boot chain.
 
 ## Known Gaps
 

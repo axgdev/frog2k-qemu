@@ -46,6 +46,10 @@ Linux-side storage writeback regression now delegates to that QEMU raw-image
 writeback smoke via `smoke-qemu-stock-fatfs-writeback`, so the default Linux
 storage regression path exercises the stronger emulator oracle even while the
 direct guest probe remains available as a separate target.
+The Linux-side display regression now delegates to the QEMU stock-display and
+GB300-display smokes via `smoke-qemu-display`, so the Linux workspace can
+exercise the stronger display oracle directly instead of replaying the guest
+panel boot chain.
 
 Concrete QEMU implications:
 
