@@ -116,6 +116,9 @@ The captured hardware logs show more than a DAC write:
 - the captured mux-open snapshot (`l22=0 l23=0 l24=0 l25=0 l26=0 l27=0
   l28=0 l29=0 r07=0`) that now appears as a QMP-visible `audio-mux`
   property;
+- the captured audio hardware open snapshot (`backend=2`, `snd0=0x14fc0082`,
+  `dac=0x4200039e`) that now appears as QMP-visible `audio-hw-backend`,
+  `audio-hw-snd0`, and `audio-hw-dac` properties;
 - a fixed 44.1 kHz, mono-left, 1024-frame, 8-period playback contract;
 - PWM/backlight activity that travels alongside the audio probe.
 

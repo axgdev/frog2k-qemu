@@ -56,6 +56,7 @@ These targets establish the current baseline for:
 - board-profile, panel identity/timing, and topology metadata through QMP property queries;
 - the generic GPIO-L output latch through QMP so keypad and board-mux writes can be observed directly;
 - the captured audio mux-open latch snapshot through QMP so audio board-state changes stay visible;
+- the captured audio hardware open snapshot through QMP so the backend handshake stays visible;
 - keypad input delivery;
 - direct Linux ELF boot;
 - Linux watchdog reboot back into the bootloader.

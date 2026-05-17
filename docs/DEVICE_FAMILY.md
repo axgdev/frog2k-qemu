@@ -111,6 +111,9 @@ until a board selector is needed. The next modelable board differences are:
 - The captured audio mux-open latch snapshot is exposed as `audio-mux` so the
   libretro-open board-state line can be checked directly from QMP as well as
   from the boot log.
+- The captured audio hardware open snapshot is also exposed as
+  `audio-hw-backend`, `audio-hw-snd0`, and `audio-hw-dac` so the backend
+  handshake seen in probe logs can be queried directly.
 
 ## Current GB300 Boot Status
 
