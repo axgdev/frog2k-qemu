@@ -602,6 +602,21 @@ static char *sf2000_machine_gpio_init_get(Object *obj, Error **errp)
 static uint32_t sf2000_gpio_l_out;
 static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size);
 
+static char *sf2000_machine_pwm2_backlight_get(Object *obj, Error **errp)
+{
+    uint32_t pwm_clk_ctrl = 0;
+    uint32_t pwm2_lohi = 0;
+    uint32_t pwm2_ctrl = 0;
+
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &pwm_clk_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE, &pwm2_lohi);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, &pwm2_ctrl);
+    return g_strdup_printf("clk=0x%08x lohi=0x%08x ctrl=0x%08x",
+                           pwm_clk_ctrl, pwm2_lohi, pwm2_ctrl);
+}
+
 static char *sf2000_machine_gpio_l_out_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x", sf2000_gpio_l_out);
@@ -1948,6 +1963,31 @@ static void sf2000_usb_phy_snapshot_selftest(void)
                   "sf2000: usb phy snapshot selftest ok board=%s "
                   "usb0=0x%08x/0x%08x usb1=0x%08x/0x%08x\n",
                   profile->name, usb0_utmi, usb0_phy, usb1_utmi, usb1_phy);
+}
+
+static void sf2000_pwm2_backlight_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t pwm_clk_ctrl;
+    uint32_t pwm2_lohi;
+    uint32_t pwm2_ctrl;
+
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &pwm_clk_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE, &pwm2_lohi);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, &pwm2_ctrl);
+    if (pwm_clk_ctrl != 0xc0010000u || pwm2_lohi != 0x05470547u ||
+        pwm2_ctrl != 0x00000090u) {
+        error_report("sf2000: pwm2 backlight selftest failed board=%s "
+                     "clk=0x%08x lohi=0x%08x ctrl=0x%08x expected=0xc0010000/0x05470547/0x00000090",
+                     profile->name, pwm_clk_ctrl, pwm2_lohi, pwm2_ctrl);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: pwm2 backlight selftest ok board=%s clk=0x%08x lohi=0x%08x ctrl=0x%08x\n",
+                  profile->name, pwm_clk_ctrl, pwm2_lohi, pwm2_ctrl);
 }
 
 static void sf2000_audio_state_selftest(void)
@@ -5655,6 +5695,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_audio_state_selftest();
     sf2000_audio_gate_live_selftest();
     sf2000_audio_gate_live_variant_selftest();
+    sf2000_pwm2_backlight_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
     sf2000_usb_phy_snapshot_selftest();
@@ -5798,6 +5839,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_gpio_init_get, NULL);
     object_class_property_add_str(oc, "gpio-l-out",
                                   sf2000_machine_gpio_l_out_get, NULL);
+    object_class_property_add_str(oc, "pwm2-backlight",
+                                  sf2000_machine_pwm2_backlight_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-ctrl3c",
                                   sf2000_machine_audio_i2s_ctrl3c_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-fade90",

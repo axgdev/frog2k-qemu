@@ -495,6 +495,7 @@ smoke-stock-display: build
 	grep -q 'sf2000: board profile=sf2000 panel=0x00858552 probe=f3f3f2f2/00000004 gpio=l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7 audio=sf2000-default-amp open=sf2000_left_only open_returns=volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 unmute_ret=0 output_ret=0 gate_state=closed gate_live_l=0x390004fe/0x2b4085b3 gate_live_r=0x000000a0/0x00000080 sr=32000 ch=1 period=1024/8 vol=75 gain=8 gate=sf2000_r07 gate_l=0x390004fe/0x2b4085b3 gate_r=0x000000a0/0x00000080 mux=l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0 hw=2 snd0=0x14fc0082 dac=0x4200039e usb0=micro-usb usb1=usb-a hub=1d6b:0002 ports=1 storage-reset=mode=safe experimental=0 status=okay clock=198000000 bus-width=1 cap-highspeed=0 supports-highspeed=0 uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 broken-cd=1' build/logs/smoke-stock-display.console
 	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: pwm2 backlight selftest ok board=sf2000 clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000060/0x0000001d usb1=0x00000060/0x0000001d' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-stock-display.log
@@ -531,6 +532,7 @@ smoke-gb300-display: build check-gb300-asd
 	grep -q 'sf2000: board profile=gb300 panel=0x00009306 probe=00000000/00000005 gpio=l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7 audio=gb300-family-amp open=sf2000_left_only open_returns=volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 unmute_ret=0 output_ret=0 gate_state=closed gate_live_l=0x350084fe/0x25c085b3 gate_live_r=0x00000020/0x00000020 sr=32000 ch=1 period=1024/8 vol=75 gain=8 gate=gb300_l15 gate_l=0x350084fe/0x25c085b3 gate_r=0x00000020/0x00000020 mux=l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0 hw=2 snd0=0x14fc0082 dac=0x4200039e usb0=micro-usb usb1=usb-a hub=1d6b:0002 ports=1 storage-reset=mode=safe experimental=0 status=okay clock=198000000 bus-width=1 cap-highspeed=0 supports-highspeed=0 uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 broken-cd=1' build/logs/smoke-gb300-display.console
 	grep -q 'sf2000: audio state selftest ok board=gb300' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=gb300' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: pwm2 backlight selftest ok board=gb300 clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: panel readback selftest ok board=gb300 panel=0x00009306' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: usb reset block selftest ok board=gb300 usb0=0x00000060/0x0000001d usb1=0x00000060/0x0000001d' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: usb link state selftest ok board=gb300' build/logs/smoke-gb300-display.log
@@ -571,6 +573,7 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"panel-probe-sig2"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"gpio-init"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"gpio-l-out"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"pwm2-backlight"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-ctrl3c"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-fade90"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-id"}}\n'; \
@@ -627,6 +630,7 @@ smoke-board-contract: build
 	grep -q '"return": "0x00000004"' build/logs/smoke-board-contract.console
 	grep -q '"return": "l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x140004b2"' build/logs/smoke-board-contract.console
+	grep -q '"return": "clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x0000ff41"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x008f0000"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1d6b:0002"' build/logs/smoke-board-contract.console
