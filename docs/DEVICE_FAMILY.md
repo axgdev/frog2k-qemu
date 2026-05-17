@@ -80,7 +80,8 @@ until a board selector is needed. The next modelable board differences are:
   `session-active` even though downstream enumeration is still not modeled.
   The root hub shape is also exposed as read-only `usb-root-hub-id` and
   `usb-root-hub-ports` properties so the observed bus topology can be matched
-  against probe logs.
+  against probe logs. The current probe evidence points to one powered
+  downstream port per controller, with no child device attached.
 
 ## Current GB300 Boot Status
 

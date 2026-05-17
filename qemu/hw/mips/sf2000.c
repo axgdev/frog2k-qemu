@@ -242,7 +242,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .usb0_route = "micro-usb",
         .usb1_route = "usb-a",
         .usb_root_hub_id = "1d6b:0002",
-        .usb_root_hub_ports = 4,
+        .usb_root_hub_ports = 1,
     },
     {
         .name = "gb300",
@@ -257,7 +257,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .usb0_route = "micro-usb",
         .usb1_route = "usb-a",
         .usb_root_hub_id = "1d6b:0002",
-        .usb_root_hub_ports = 4,
+        .usb_root_hub_ports = 1,
     },
 };
 
@@ -4495,6 +4495,10 @@ static void sf2000_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(lcd), 0, SF2000_LCD_MMIO_BASE);
     qemu_input_handler_activate(qemu_input_handler_register(
         lcd, &sf2000_keyboard_handler));
+    sf2000_usb_link_powered[0] = true;
+    sf2000_usb_link_powered[1] = true;
+    sf2000_usb_link_active[0] = false;
+    sf2000_usb_link_active[1] = false;
     info_report("sf2000: board profile=%s audio=%s usb0=%s usb1=%s",
                 sf2000_board_profile_name(),
                 sf2000_board_profile_spec()->audio_route,
