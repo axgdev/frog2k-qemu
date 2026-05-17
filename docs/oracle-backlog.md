@@ -51,11 +51,12 @@ Concrete QEMU implications:
 The current display model is useful, but the family still has board-specific
 panel identity and readback differences that matter for universal bring-up.
 Keep panel-ID and MADCTL behavior visible enough to catch mirrored/rotated
-init mistakes. QEMU now synthesizes the panel-ID readback path directly and
-has an explicit `board-profile` selector for GB300 display geometry; the
-machine now also exposes `panel-id` and `panel-te-hz` as QMP-visible board
-contract properties so the remaining work is the timing/readout edge cases
-around them.
+init mistakes. QEMU now synthesizes the panel-ID readback path directly,
+boot-checks the captured readback table against the board profile, and has an
+explicit `board-profile` selector for GB300 display geometry; the machine now
+also exposes `panel-id` and `panel-te-hz` as QMP-visible board contract
+properties so the remaining work is the timing/readout edge cases around
+them.
 
 Current verification status: the Linux panel smoke still reaches the
 `/init` handoff and the flat-loader thread start, but it does not reach any

@@ -283,6 +283,8 @@ static uint32_t sf2000_audio_i2s_fade90;
 static bool sf2000_storage_selftest_raw;
 static bool sf2000_usb_link_powered[2];
 static bool sf2000_usb_link_active[2];
+static uint32_t sf2000_panel_sample_readback(SF2000LCDState *s,
+                                             uint32_t value);
 
 static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
 {
@@ -634,6 +636,11 @@ struct SF2000LCDState {
     uint16_t panel_y1;
     uint16_t panel_x;
     uint16_t panel_y;
+    uint8_t panel_readback[5];
+    uint8_t panel_readback_len;
+    uint8_t panel_readback_byte;
+    uint8_t panel_readback_bit;
+    bool panel_readback_active;
     uint32_t panel_cmd_count;
     uint32_t panel_pixel_count;
     uint32_t panel_pixels[SF2000_LCD_WIDTH * SF2000_LCD_HEIGHT];
@@ -2455,6 +2462,10 @@ static uint32_t sf2000_gpio_l_sample(uint32_t value)
                 value);
     }
 
+    if (sf2000_lcd) {
+        value = sf2000_panel_sample_readback(sf2000_lcd, value);
+    }
+
     return value;
 }
 
@@ -3121,6 +3132,320 @@ static void sf2000_panel_update_rect(SF2000LCDState *s, uint16_t x, uint16_t y)
     dpy_gfx_update(s->con, x, y, 1, 1);
 }
 
+static size_t sf2000_panel_fill_readback(const SF2000BoardProfileSpec *profile,
+                                         uint8_t cmd, uint8_t resp[5])
+{
+    size_t len = 0;
+
+    memset(resp, 0, 5);
+
+    switch (profile->panel_id) {
+    case 0x00858552:
+        switch (cmd) {
+        case 0x00:
+            resp[0] = 0xe0;
+            resp[1] = 0xe0;
+            len = 2;
+            break;
+        case 0x04:
+            resp[0] = 0xe4;
+            resp[1] = 0x85;
+            resp[2] = 0x85;
+            resp[3] = 0x52;
+            len = 4;
+            break;
+        case 0x09:
+            resp[0] = 0xe9;
+            resp[1] = 0x00;
+            resp[2] = 0x61;
+            resp[3] = 0x00;
+            resp[4] = 0x00;
+            len = 5;
+            break;
+        case 0x0a:
+            resp[0] = 0xea;
+            resp[1] = 0x08;
+            len = 2;
+            break;
+        case 0x0c:
+            resp[0] = 0xec;
+            resp[1] = 0x06;
+            len = 2;
+            break;
+        case 0xd3:
+            resp[0] = 0xf3;
+            resp[1] = 0xf3;
+            resp[2] = 0xf3;
+            resp[3] = 0xf3;
+            len = 4;
+            break;
+        case 0xda:
+            resp[0] = 0xfa;
+            resp[1] = 0x85;
+            len = 2;
+            break;
+        case 0xdb:
+            resp[0] = 0xfb;
+            resp[1] = 0x85;
+            len = 2;
+            break;
+        case 0xdc:
+            resp[0] = 0xfc;
+            resp[1] = 0x52;
+            len = 2;
+            break;
+        default:
+            break;
+        }
+        break;
+    case 0x00009306:
+        switch (cmd) {
+        case 0x00:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            len = 2;
+            break;
+        case 0x04:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            resp[2] = 0x93;
+            resp[3] = 0x06;
+            len = 4;
+            break;
+        case 0x09:
+            resp[0] = 0x94;
+            resp[1] = 0x94;
+            resp[2] = 0x53;
+            resp[3] = 0x04;
+            resp[4] = 0x00;
+            len = 5;
+            break;
+        case 0x0a:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            len = 2;
+            break;
+        case 0x0c:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            len = 2;
+            break;
+        case 0xd3:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            resp[2] = 0x93;
+            resp[3] = 0x06;
+            len = 4;
+            break;
+        case 0xda:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            len = 2;
+            break;
+        case 0xdb:
+            resp[0] = 0x93;
+            resp[1] = 0x93;
+            len = 2;
+            break;
+        case 0xdc:
+            resp[0] = 0x06;
+            resp[1] = 0x06;
+            len = 2;
+            break;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return len;
+}
+
+static bool sf2000_panel_is_readback_cmd(uint8_t cmd)
+{
+    switch (cmd) {
+    case 0x00:
+    case 0x04:
+    case 0x09:
+    case 0x0a:
+    case 0x0c:
+    case 0xd3:
+    case 0xda:
+    case 0xdb:
+    case 0xdc:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void sf2000_panel_prepare_readback(SF2000LCDState *s)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+
+    s->panel_readback_len =
+        sf2000_panel_fill_readback(profile, s->panel_cmd, s->panel_readback);
+    s->panel_readback_byte = 0;
+    s->panel_readback_bit = 0;
+    s->panel_readback_active = s->panel_readback_len > 0;
+}
+
+static uint32_t sf2000_panel_sample_readback(SF2000LCDState *s, uint32_t value)
+{
+    uint8_t bit;
+
+    if (!s->panel_readback_active) {
+        return value;
+    }
+
+    bit = (s->panel_readback[s->panel_readback_byte] >>
+           (7 - s->panel_readback_bit)) & 1u;
+    if (bit) {
+        value |= BIT(SF2000_KEY_DATA_BIT);
+    } else {
+        value &= ~BIT(SF2000_KEY_DATA_BIT);
+    }
+
+    s->panel_readback_bit++;
+    if (s->panel_readback_bit == 8) {
+        s->panel_readback_bit = 0;
+        s->panel_readback_byte++;
+        if (s->panel_readback_byte >= s->panel_readback_len) {
+            s->panel_readback_active = false;
+        }
+    }
+
+    return value;
+}
+
+static void sf2000_panel_readback_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    static const uint8_t commands[] = {
+        0x00, 0x04, 0x09, 0x0a, 0x0c, 0xd3, 0xda, 0xdb, 0xdc,
+    };
+    uint8_t expected[5];
+    uint8_t actual[5];
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(commands); i++) {
+        size_t expected_len;
+        size_t actual_len;
+
+        memset(expected, 0, sizeof(expected));
+        switch (profile->panel_id) {
+        case 0x00858552:
+            switch (commands[i]) {
+            case 0x00:
+                memcpy(expected, (uint8_t[]){ 0xe0, 0xe0 }, 2);
+                expected_len = 2;
+                break;
+            case 0x04:
+                memcpy(expected, (uint8_t[]){ 0xe4, 0x85, 0x85, 0x52 }, 4);
+                expected_len = 4;
+                break;
+            case 0x09:
+                memcpy(expected, (uint8_t[]){ 0xe9, 0x00, 0x61, 0x00, 0x00 }, 5);
+                expected_len = 5;
+                break;
+            case 0x0a:
+                memcpy(expected, (uint8_t[]){ 0xea, 0x08 }, 2);
+                expected_len = 2;
+                break;
+            case 0x0c:
+                memcpy(expected, (uint8_t[]){ 0xec, 0x06 }, 2);
+                expected_len = 2;
+                break;
+            case 0xd3:
+                memcpy(expected, (uint8_t[]){ 0xf3, 0xf3, 0xf3, 0xf3 }, 4);
+                expected_len = 4;
+                break;
+            case 0xda:
+                memcpy(expected, (uint8_t[]){ 0xfa, 0x85 }, 2);
+                expected_len = 2;
+                break;
+            case 0xdb:
+                memcpy(expected, (uint8_t[]){ 0xfb, 0x85 }, 2);
+                expected_len = 2;
+                break;
+            case 0xdc:
+                memcpy(expected, (uint8_t[]){ 0xfc, 0x52 }, 2);
+                expected_len = 2;
+                break;
+            default:
+                expected_len = 0;
+                break;
+            }
+            break;
+        case 0x00009306:
+            switch (commands[i]) {
+            case 0x00:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00 }, 2);
+                expected_len = 2;
+                break;
+            case 0x04:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00, 0x93, 0x06 }, 4);
+                expected_len = 4;
+                break;
+            case 0x09:
+                memcpy(expected, (uint8_t[]){ 0x94, 0x94, 0x53, 0x04, 0x00 }, 5);
+                expected_len = 5;
+                break;
+            case 0x0a:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00 }, 2);
+                expected_len = 2;
+                break;
+            case 0x0c:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00 }, 2);
+                expected_len = 2;
+                break;
+            case 0xd3:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00, 0x93, 0x06 }, 4);
+                expected_len = 4;
+                break;
+            case 0xda:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00 }, 2);
+                expected_len = 2;
+                break;
+            case 0xdb:
+                memcpy(expected, (uint8_t[]){ 0x93, 0x93 }, 2);
+                expected_len = 2;
+                break;
+            case 0xdc:
+                memcpy(expected, (uint8_t[]){ 0x06, 0x06 }, 2);
+                expected_len = 2;
+                break;
+            default:
+                expected_len = 0;
+                break;
+            }
+            break;
+        default:
+            expected_len = 0;
+            break;
+        }
+
+        actual_len = sf2000_panel_fill_readback(profile, commands[i], actual);
+        if (expected_len != actual_len ||
+            memcmp(expected, actual, expected_len) != 0) {
+            error_report("sf2000: panel readback selftest failed board=%s cmd=0x%02x "
+                         "expected_len=%zu actual_len=%zu expected=%02x:%02x:%02x:%02x:%02x "
+                         "actual=%02x:%02x:%02x:%02x:%02x",
+                         profile->name, commands[i],
+                         expected_len, actual_len,
+                         expected[0], expected[1], expected[2], expected[3], expected[4],
+                         actual[0], actual[1], actual[2], actual[3], actual[4]);
+            return;
+        }
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: panel readback selftest ok board=%s panel=0x%08x\n",
+                  profile->name, profile->panel_id);
+}
+
 static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
 {
     uint16_t *args = s->panel_args;
@@ -3166,6 +3491,7 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
         } else {
             s->panel_x++;
         }
+        s->panel_readback_active = false;
         break;
     default:
         break;
@@ -3194,6 +3520,19 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
                       "sf2000: panel-ramwr x=%u..%u y=%u..%u pixels=%u\n",
                       s->panel_x0, s->panel_x1, s->panel_y0, s->panel_y1,
                       s->panel_pixel_count);
+        s->panel_readback_active = false;
+    } else if (sf2000_panel_is_readback_cmd(s->panel_cmd)) {
+        sf2000_panel_prepare_readback(s);
+        if (s->panel_readback_len) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: panel-read cmd=0x%02x bytes=%u data=%02x:%02x:%02x:%02x:%02x\n",
+                          s->panel_cmd, s->panel_readback_len,
+                          s->panel_readback[0], s->panel_readback[1],
+                          s->panel_readback[2], s->panel_readback[3],
+                          s->panel_readback[4]);
+        }
+    } else {
+        s->panel_readback_active = false;
     }
 }
 
@@ -4707,6 +5046,7 @@ static void sf2000_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(lcd), 0, SF2000_LCD_MMIO_BASE);
     qemu_input_handler_activate(qemu_input_handler_register(
         lcd, &sf2000_keyboard_handler));
+    sf2000_panel_readback_selftest();
     sf2000_audio_backend_init(machine);
     sf2000_usb_link_powered[0] = true;
     sf2000_usb_link_powered[1] = true;
