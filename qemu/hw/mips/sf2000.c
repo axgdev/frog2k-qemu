@@ -229,6 +229,7 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t panel_te_hz;
     uint32_t panel_id;
     const char *audio_route;
+    const char *audio_gate_route;
     uint32_t audio_sample_rate_hz;
     uint32_t audio_channels;
     uint32_t audio_period_frames;
@@ -253,6 +254,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .panel_te_hz = 60,
         .panel_id = 0x00858552,
         .audio_route = "sf2000-default-amp",
+        .audio_gate_route = "sf2000_r07",
         .audio_sample_rate_hz = 44100,
         .audio_channels = 2,
         .audio_period_frames = 1024,
@@ -275,6 +277,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .panel_te_hz = 60,
         .panel_id = 0x00009306,
         .audio_route = "gb300-family-amp",
+        .audio_gate_route = "sf2000_r07",
         .audio_sample_rate_hz = 44100,
         .audio_channels = 2,
         .audio_period_frames = 1024,
@@ -333,6 +336,11 @@ static uint32_t sf2000_audio_wave_step;
 static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->audio_route);
+}
+
+static char *sf2000_machine_audio_gate_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_gate_route);
 }
 
 static char *sf2000_machine_audio_power_get(Object *obj, Error **errp)
@@ -5101,7 +5109,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
     info_report("sf2000: board profile=%s panel=0x%08x audio=%s sr=%u ch=%u "
-                "period=%u/%u usb0=%s usb1=%s hub=%s ports=%u",
+                "period=%u/%u gate=%s usb0=%s usb1=%s hub=%s ports=%u",
                 sf2000_board_profile_name(),
                 sf2000_board_profile_spec()->panel_id,
                 sf2000_board_profile_spec()->audio_route,
@@ -5109,6 +5117,7 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->audio_channels,
                 sf2000_board_profile_spec()->audio_period_frames,
                 sf2000_board_profile_spec()->audio_periods,
+                sf2000_board_profile_spec()->audio_gate_route,
                 sf2000_board_profile_spec()->usb0_route,
                 sf2000_board_profile_spec()->usb1_route,
                 sf2000_board_profile_spec()->usb_root_hub_id,
@@ -5159,6 +5168,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_board_profile_set);
     object_class_property_add_str(oc, "audio-route",
                                   sf2000_machine_audio_route_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-route",
+                                  sf2000_machine_audio_gate_route_get, NULL);
     object_class_property_add_str(oc, "audio-power",
                                   sf2000_machine_audio_power_get, NULL);
     object_class_property_add_str(oc, "audio-backend-ready",

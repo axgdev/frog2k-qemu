@@ -93,3 +93,21 @@ file, and restarts a second VM from that state until the log shows
 `sf2000: entry-bytes storage_probe_entry pc=0x047c0050`. That closes the basic
 skip-ahead gap; any remaining work here is mostly ergonomics if we want a
 shorter or less QMP-specific resume path.
+
+## Priority 5: Audio Amplifier Routing
+
+The audio model now exposes the observed playback contract, live backend
+hookup, DAC power state, and the board-level gate route as QMP-visible
+properties. That is enough to keep the contract visible in the regression
+smoke, but it is still only a contract surface.
+
+The captured hardware logs show more than a DAC write:
+
+- a stable gate label (`sf2000_r07`);
+- board-side mux state changes around mute/unmute and volume changes;
+- a fixed 44.1 kHz, 1-channel, 1024-frame, 8-period playback contract;
+- PWM/backlight activity that travels alongside the audio probe.
+
+Use those logs as the next reference if the amplifier chain is modeled more
+deeply. Until then, keep the board contract queryable and do not confuse the
+live QEMU backend sink with a full analog implementation.
