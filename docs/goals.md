@@ -78,7 +78,8 @@ strong oracle:
 - USB host and gadget behavior; the current Linux fastprobe now proves SF2000
   MUSB controller registration and access tracing, but still does not validate
   downstream host/device enumeration or any PHY-specific quirks, so this
-  remains a board-behavior problem rather than a completed host oracle;
+  remains a board-behavior problem rather than a completed host oracle, even
+  though the machine now exposes read-only USB link-state properties;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible

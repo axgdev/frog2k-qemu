@@ -72,6 +72,9 @@ until a board selector is needed. The next modelable board differences are:
   `/root/host-frogdev/universal/sf2000_gb300_multicore_private/bisrv_gb300_v2.asd`.
   The private symbol script maps both SF2000 and GB300 firmware addresses:
   `/root/host-frogdev/universal/sf2000_gb300_multicore_private/scripts/firmware-symbol.py`.
+- USB routing: the machine now exposes `usb0-state` and `usb1-state` as
+  read-only properties alongside the route labels, so controller link state
+  is queryable even though downstream enumeration is still not modeled.
 
 ## Current GB300 Boot Status
 

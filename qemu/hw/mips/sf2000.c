@@ -242,6 +242,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
 
 static char *sf2000_board_profile = NULL;
 static bool sf2000_audio_powered;
+static bool sf2000_usb_link_active[2];
 
 static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
 {
@@ -280,6 +281,16 @@ static char *sf2000_machine_usb0_route_get(Object *obj, Error **errp)
 static char *sf2000_machine_usb1_route_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->usb1_route);
+}
+
+static char *sf2000_machine_usb0_state_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_usb_link_active[0] ? "active" : "disconnected");
+}
+
+static char *sf2000_machine_usb1_state_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_usb_link_active[1] ? "active" : "disconnected");
 }
 
 typedef struct SF2000RegDefault {
@@ -1212,6 +1223,9 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
     old = sf2000_usb_regs[index][offset >> 2];
     sf2000_usb_regs[index][offset >> 2] =
         (old & ~(mask << shift)) | (((uint32_t)value & mask) << shift);
+    if (offset == 0x00 || offset == 0x60) {
+        sf2000_usb_link_active[index] = value != 0;
+    }
     if (!sf2000_usb_access_reported[index]) {
         sf2000_usb_access_reported[index] = true;
         info_report("sf2000: usb%u controller access=write route=%s offset=0x%02x value=0x%08x",
@@ -4428,6 +4442,10 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_usb0_route_get, NULL);
     object_class_property_add_str(oc, "usb1-route",
                                   sf2000_machine_usb1_route_get, NULL);
+    object_class_property_add_str(oc, "usb0-state",
+                                  sf2000_machine_usb0_state_get, NULL);
+    object_class_property_add_str(oc, "usb1-state",
+                                  sf2000_machine_usb1_state_get, NULL);
 }
 
 static const TypeInfo sf2000_machine_type = {
