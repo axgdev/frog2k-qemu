@@ -108,6 +108,9 @@ until a board selector is needed. The next modelable board differences are:
 - The generic GPIO-L output latch is also exposed as `gpio-l-out` so the
   keypad and board-mux write path can be queried directly instead of only
   inferred from guest traces.
+- The captured audio mux-open latch snapshot is exposed as `audio-mux` so the
+  libretro-open board-state line can be checked directly from QMP as well as
+  from the boot log.
 
 ## Current GB300 Boot Status
 

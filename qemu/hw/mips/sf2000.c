@@ -234,6 +234,7 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t audio_gate_l1;
     uint32_t audio_gate_r0;
     uint32_t audio_gate_r1;
+    const char *audio_mux_open;
     uint32_t audio_volume;
     uint32_t audio_gain;
     uint32_t audio_sample_rate_hz;
@@ -265,6 +266,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gate_l1 = 0x2b4085b3,
         .audio_gate_r0 = 0x000000a0,
         .audio_gate_r1 = 0x00000080,
+        .audio_mux_open = "l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0",
         .audio_volume = 75,
         .audio_gain = 8,
         .audio_sample_rate_hz = 44100,
@@ -294,6 +296,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gate_l1 = 0x25c085b3,
         .audio_gate_r0 = 0x00000020,
         .audio_gate_r1 = 0x00000020,
+        .audio_mux_open = "l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0",
         .audio_volume = 75,
         .audio_gain = 8,
         .audio_sample_rate_hz = 44100,
@@ -387,6 +390,11 @@ static char *sf2000_machine_audio_gate_r_get(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x/0x%08x",
                            sf2000_board_profile_spec()->audio_gate_r0,
                            sf2000_board_profile_spec()->audio_gate_r1);
+}
+
+static char *sf2000_machine_audio_mux_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_mux_open);
 }
 
 static char *sf2000_machine_audio_volume_get(Object *obj, Error **errp)
@@ -5216,7 +5224,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_active[1] = false;
     info_report("sf2000: board profile=%s panel=0x%08x audio=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
-                "usb0=%s usb1=%s hub=%s ports=%u",
+                "mux=%s usb0=%s usb1=%s hub=%s ports=%u",
                 sf2000_board_profile_name(),
                 sf2000_board_profile_spec()->panel_id,
                 sf2000_board_profile_spec()->audio_route,
@@ -5231,6 +5239,7 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->audio_gate_l1,
                 sf2000_board_profile_spec()->audio_gate_r0,
                 sf2000_board_profile_spec()->audio_gate_r1,
+                sf2000_board_profile_spec()->audio_mux_open,
                 sf2000_board_profile_spec()->usb0_route,
                 sf2000_board_profile_spec()->usb1_route,
                 sf2000_board_profile_spec()->usb_root_hub_id,
@@ -5287,6 +5296,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_gate_l_get, NULL);
     object_class_property_add_str(oc, "audio-gate-r",
                                   sf2000_machine_audio_gate_r_get, NULL);
+    object_class_property_add_str(oc, "audio-mux",
+                                  sf2000_machine_audio_mux_get, NULL);
     object_class_property_add_str(oc, "audio-volume",
                                   sf2000_machine_audio_volume_get, NULL);
     object_class_property_add_str(oc, "audio-gain",
