@@ -521,6 +521,7 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
     { 0x8035a794, 0x8035f97c, "run_game" },
     { 0x8035f97c, 0x80365c34, "unwqw_decompress" },
     { 0x80355770, 0x80355b50, "security_check" },
+    { 0x80002194, 0x80002280, "storage_probe_entry" },
     { 0x047a0050, 0x047d0000, "storage_probe" },
 };
 
