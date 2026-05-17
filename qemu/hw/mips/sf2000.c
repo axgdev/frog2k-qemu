@@ -237,6 +237,7 @@ typedef struct SF2000BoardProfileSpec {
     const char *gpio_init;
     const char *audio_route;
     const char *audio_open_route;
+    const char *audio_runtime_route;
     const char *audio_open_returns;
     const char *audio_close_returns;
     const char *audio_gate_route;
@@ -255,6 +256,7 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t audio_gain;
     uint32_t audio_sample_rate_hz;
     uint32_t audio_channels;
+    uint32_t audio_runtime_channels;
     uint32_t audio_period_frames;
     uint32_t audio_periods;
     const char *usb0_route;
@@ -286,6 +288,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
                      "mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7",
         .audio_route = "sf2000-default-amp",
         .audio_open_route = "sf2000_left_only",
+        .audio_runtime_route = "sf2000_stereo_safe",
         .audio_open_returns = "volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 "
                               "unmute_ret=0 output_ret=0",
         .audio_close_returns = "mute_ret=-1 drop_ret=0 free_ret=0",
@@ -307,6 +310,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gain = 8,
         .audio_sample_rate_hz = 32000,
         .audio_channels = 1,
+        .audio_runtime_channels = 2,
         .audio_period_frames = 1024,
         .audio_periods = 8,
         .usb0_route = "micro-usb",
@@ -339,6 +343,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
                      "mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7",
         .audio_route = "gb300-family-amp",
         .audio_open_route = "sf2000_left_only",
+        .audio_runtime_route = "sf2000_stereo_safe",
         .audio_open_returns = "volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 "
                               "unmute_ret=0 output_ret=0",
         .audio_close_returns = "mute_ret=-1 drop_ret=0 free_ret=0",
@@ -360,6 +365,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gain = 8,
         .audio_sample_rate_hz = 32000,
         .audio_channels = 1,
+        .audio_runtime_channels = 2,
         .audio_period_frames = 1024,
         .audio_periods = 8,
         .usb0_route = "micro-usb",
@@ -473,6 +479,11 @@ static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_open_route_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->audio_open_route);
+}
+
+static char *sf2000_machine_audio_runtime_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_runtime_route);
 }
 
 static char *sf2000_machine_audio_open_returns_get(Object *obj, Error **errp)
@@ -599,6 +610,11 @@ static char *sf2000_machine_audio_sample_rate_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_channels_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_channels);
+}
+
+static char *sf2000_machine_audio_runtime_channels_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_runtime_channels);
 }
 
 static char *sf2000_machine_audio_period_frames_get(Object *obj, Error **errp)
@@ -5943,7 +5959,7 @@ static void sf2000_init(MachineState *machine)
     g_autofree char *usb0_power = sf2000_machine_usb0_power_get(NULL, NULL);
     g_autofree char *usb1_power = sf2000_machine_usb1_power_get(NULL, NULL);
 
-    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s open_returns=%s close_returns=%s hw_close=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u "
+    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s runtime_open=%s open_returns=%s close_returns=%s hw_close=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u runtime_ch=%u "
                 "pwm2_backlight_active=%s "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s usb0_power=%s usb1_power=%s hub=%s ports=%u "
@@ -5955,6 +5971,7 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->gpio_init,
                 sf2000_board_profile_spec()->audio_route,
                 sf2000_board_profile_spec()->audio_open_route,
+                sf2000_board_profile_spec()->audio_runtime_route,
                 sf2000_board_profile_spec()->audio_open_returns,
                 sf2000_board_profile_spec()->audio_close_returns,
                 sf2000_board_profile_spec()->audio_hw_close,
@@ -5963,6 +5980,7 @@ static void sf2000_init(MachineState *machine)
                 gate_live_r,
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
                 sf2000_board_profile_spec()->audio_channels,
+                sf2000_board_profile_spec()->audio_runtime_channels,
                 pwm2_backlight_active,
                 sf2000_board_profile_spec()->audio_period_frames,
                 sf2000_board_profile_spec()->audio_periods,
@@ -6032,6 +6050,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_route_get, NULL);
     object_class_property_add_str(oc, "audio-open-route",
                                   sf2000_machine_audio_open_route_get, NULL);
+    object_class_property_add_str(oc, "audio-runtime-route",
+                                  sf2000_machine_audio_runtime_route_get, NULL);
     object_class_property_add_str(oc, "audio-open-returns",
                                   sf2000_machine_audio_open_returns_get, NULL);
     object_class_property_add_str(oc, "audio-close-returns",
@@ -6074,6 +6094,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_sample_rate_get, NULL);
     object_class_property_add_str(oc, "audio-channels",
                                   sf2000_machine_audio_channels_get, NULL);
+    object_class_property_add_str(oc, "audio-runtime-channels",
+                                  sf2000_machine_audio_runtime_channels_get, NULL);
     object_class_property_add_str(oc, "audio-period-frames",
                                   sf2000_machine_audio_period_frames_get, NULL);
     object_class_property_add_str(oc, "audio-periods",

@@ -149,9 +149,10 @@ strong oracle:
   plus live gate-word snapshot are now queryable and boot-checked. The live
   backend PCM generator is now boot-checked as well, but the analog chain and
   guest-driven PCM behavior remain open. The hardware runtime logs also show
-  `sf2000_stereo_safe` with 2 channels during libretro audio open, which is
-  still not modeled by the current QEMU board contract and remains a
-  provisional runtime-audio gap.
+  `sf2000_stereo_safe` with 2 channels during libretro audio open, and that
+  runtime snapshot is now queryable as `audio-runtime-route` and
+  `audio-runtime-channels`, but it still only captures the frontend/runtime
+  choice rather than a full analog implementation.
   The PWM2/backlight on/off state is now boot-checked through the scanout
   blanking path, so the display model proves the off-state effect instead of
   only the register snapshot. The USB reset block is now boot-checked as

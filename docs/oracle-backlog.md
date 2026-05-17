@@ -178,9 +178,10 @@ The captured hardware logs show more than a DAC write:
   muted state before firmware runs, and the boot-checked PCM waveform selftest
   now verifies the generator, but the analog chain is still not fully modeled;
 - the physical runtime logs also show `sf2000_stereo_safe` with 2 channels
-  during libretro audio open, which is not yet represented by the current QEMU
-  board contract and should be treated as a separate provisional runtime-audio
-  gap until we decide whether it is board-specific or frontend-specific;
+  during libretro audio open, and the QEMU model now exposes that runtime
+  snapshot as `audio-runtime-route` and `audio-runtime-channels`; this keeps
+  the frontend/runtime choice visible, but it still does not model the full
+  analog implementation;
 - a fixed 32 kHz, mono-left, 1024-frame, 8-period playback contract;
 - PWM/backlight activity that travels alongside the audio probe.
 

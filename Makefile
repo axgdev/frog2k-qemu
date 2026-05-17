@@ -492,7 +492,7 @@ smoke-stock-display: build
 		-d guest_errors,unimp -D build/logs/smoke-stock-display.log \
 	> build/logs/smoke-stock-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-stock-display.console
-	grep -q 'sr=32000 ch=1 pwm2_backlight_active=false' build/logs/smoke-stock-display.console
+	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=false' build/logs/smoke-stock-display.console
 	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: audio pcm selftest ok board=sf2000 sample0=2048 sample1=-2048' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-stock-display.log
@@ -533,7 +533,7 @@ smoke-gb300-display: build check-gb300-asd
 		-d guest_errors,unimp -D build/logs/smoke-gb300-display.log \
 	> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-gb300-display.console
-	grep -q 'sr=32000 ch=1 pwm2_backlight_active=false' build/logs/smoke-gb300-display.console
+	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=false' build/logs/smoke-gb300-display.console
 	grep -q 'sf2000: audio state selftest ok board=gb300' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: audio pcm selftest ok board=gb300 sample0=2048 sample1=-2048' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=gb300' build/logs/smoke-gb300-display.log
@@ -556,6 +556,7 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"board-profile"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-route"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-open-route"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-runtime-route"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-open-returns"}}\n'; \
  printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-close-returns"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gate-route"}}\n'; \
@@ -575,6 +576,7 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-backend-ready"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-sample-rate"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-channels"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-runtime-channels"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-period-frames"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-periods"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"panel-id"}}\n'; \
@@ -614,6 +616,8 @@ smoke-board-contract: build
 	grep -q '"return": "sf2000"' build/logs/smoke-board-contract.console
 	grep -q '"return": "sf2000-default-amp"' build/logs/smoke-board-contract.console
 	grep -q '"return": "sf2000_left_only"' build/logs/smoke-board-contract.console
+	grep -q '"return": "sf2000_stereo_safe"' build/logs/smoke-board-contract.console
+	grep -q 'runtime_open=sf2000_stereo_safe .* runtime_ch=2' build/logs/smoke-board-contract.console
 	grep -q '"return": "volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 unmute_ret=0 output_ret=0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "mute_ret=-1 drop_ret=0 free_ret=0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "sf2000_r07"' build/logs/smoke-board-contract.console
@@ -637,6 +641,7 @@ smoke-board-contract: build
 	grep -q '"return": "true"' build/logs/smoke-board-contract.console
 	grep -q '"return": "32000"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1"' build/logs/smoke-board-contract.console
+	grep -q '"return": "2"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1024"' build/logs/smoke-board-contract.console
 	grep -q '"return": "8"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x00858552"' build/logs/smoke-board-contract.console
