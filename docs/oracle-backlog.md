@@ -39,7 +39,8 @@ Concrete QEMU implications:
 The current display model is useful, but the family still has board-specific
 panel identity and readback differences that matter for universal bring-up.
 Keep panel-ID and MADCTL behavior visible enough to catch mirrored/rotated
-init mistakes.
+init mistakes. QEMU now synthesizes the panel-ID readback path directly;
+remaining work is the timing/readout edge cases around it.
 
 ## Priority 3: USB Host/Device Topology
 
