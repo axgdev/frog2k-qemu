@@ -86,7 +86,7 @@ strong oracle:
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible
-  `audio-power` and `audio-dac-value` state properties.
+  `audio-power`, `audio-dac-value`, and audio playback contract properties.
 - direct snapshot ergonomics if we decide to wrap the current QMP migration
   flow in a shorter, less QMP-specific resume path.
 

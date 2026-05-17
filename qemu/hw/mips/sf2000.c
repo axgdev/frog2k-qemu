@@ -218,6 +218,10 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t lcd_height;
     uint32_t panel_te_hz;
     const char *audio_route;
+    uint32_t audio_sample_rate_hz;
+    uint32_t audio_channels;
+    uint32_t audio_period_frames;
+    uint32_t audio_periods;
     const char *usb0_route;
     const char *usb1_route;
 } SF2000BoardProfileSpec;
@@ -229,6 +233,10 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .lcd_height = SF2000_LCD_HEIGHT,
         .panel_te_hz = 60,
         .audio_route = "sf2000-default-amp",
+        .audio_sample_rate_hz = 44100,
+        .audio_channels = 2,
+        .audio_period_frames = 1024,
+        .audio_periods = 8,
         .usb0_route = "micro-usb",
         .usb1_route = "usb-a",
     },
@@ -238,6 +246,10 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .lcd_height = 320,
         .panel_te_hz = 60,
         .audio_route = "gb300-family-amp",
+        .audio_sample_rate_hz = 44100,
+        .audio_channels = 2,
+        .audio_period_frames = 1024,
+        .audio_periods = 8,
         .usb0_route = "micro-usb",
         .usb1_route = "usb-a",
     },
@@ -285,6 +297,28 @@ static char *sf2000_machine_audio_dac_value_get(Object *obj, Error **errp)
     }
 
     return g_strdup_printf("0x%08x", sf2000_audio_dac_value);
+}
+
+static char *sf2000_machine_audio_sample_rate_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u",
+                           sf2000_board_profile_spec()->audio_sample_rate_hz);
+}
+
+static char *sf2000_machine_audio_channels_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_channels);
+}
+
+static char *sf2000_machine_audio_period_frames_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u",
+                           sf2000_board_profile_spec()->audio_period_frames);
+}
+
+static char *sf2000_machine_audio_periods_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_periods);
 }
 
 static char *sf2000_machine_usb0_route_get(Object *obj, Error **errp)
@@ -4486,6 +4520,14 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_power_get, NULL);
     object_class_property_add_str(oc, "audio-dac-value",
                                   sf2000_machine_audio_dac_value_get, NULL);
+    object_class_property_add_str(oc, "audio-sample-rate",
+                                  sf2000_machine_audio_sample_rate_get, NULL);
+    object_class_property_add_str(oc, "audio-channels",
+                                  sf2000_machine_audio_channels_get, NULL);
+    object_class_property_add_str(oc, "audio-period-frames",
+                                  sf2000_machine_audio_period_frames_get, NULL);
+    object_class_property_add_str(oc, "audio-periods",
+                                  sf2000_machine_audio_periods_get, NULL);
     object_class_property_add_str(oc, "usb0-route",
                                   sf2000_machine_usb0_route_get, NULL);
     object_class_property_add_str(oc, "usb1-route",
