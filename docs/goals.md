@@ -80,7 +80,8 @@ strong oracle:
   next step is to keep the controller-trace oracle stable while separating it
   from the initrd/device-node path; the emulator also now self-tests the
   synthetic no-image writeback path and has an opt-in raw-image writeback
-  smoke so that both fallback media and attached raw media stay writable;
+  smoke through the SDIO DMA path so that both fallback media and attached raw
+  media stay writable;
 - audio and amplifier routing;
 - USB host and gadget behavior; the current Linux fastprobe now proves SF2000
   MUSB controller registration and access tracing, but still does not validate

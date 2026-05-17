@@ -481,8 +481,9 @@ smoke-stock-fatfs-writeback: build
 		-d guest_errors,unimp -D build/logs/smoke-stock-fatfs-writeback.log \
 		> build/logs/smoke-stock-fatfs-writeback.console 2>&1 || test $$? -eq 124; \
 	grep -q 'sf2000: using SD image' build/logs/smoke-stock-fatfs-writeback.console; \
-	grep -q 'sf2000: raw SD probe writeback selftest ok lba=16' build/logs/smoke-stock-fatfs-writeback.console; \
-	od -An -tx1 -N 16 -j $$((16 * 512)) $$tmp_sd | grep -q '5a 5a 5a 5a 5a 5a 5a 5a'
+	grep -q 'sf2000: raw SD probe DMA writeback selftest ok lba=16 sectors=2' build/logs/smoke-stock-fatfs-writeback.console; \
+	od -An -tx1 -N 16 -j $$((16 * 512)) $$tmp_sd | grep -q '5a 5a 5a 5a 5a 5a 5a 5a'; \
+	od -An -tx1 -N 16 -j $$((17 * 512)) $$tmp_sd | grep -q '5a 5a 5a 5a 5a 5a 5a 5a'
 
 smoke-stock-display: build
 	mkdir -p build/logs

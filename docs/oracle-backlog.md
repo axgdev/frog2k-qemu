@@ -31,10 +31,10 @@ still did not surface `sf2000_storage_fastprobe: probe begin`, so the
 controller-trace oracle remains the only reliable proof for the Linux probe
 body for now. The QEMU no-image fallback now self-tests its synthetic
 writeback path and logs `sf2000: synthetic FAT probe writeback selftest ok`,
-and the new `smoke-stock-fatfs-writeback` raw-image smoke logs
-`sf2000: raw SD probe writeback selftest ok lba=16` against a temporary raw
-image, so both fallback and attached-image writeability are independently
-proven.
+and the new `smoke-stock-fatfs-writeback` raw-image smoke exercises the SDIO
+DMA write path and logs `sf2000: raw SD probe DMA writeback selftest ok
+lba=16 sectors=2` against a temporary raw image, so both fallback and
+attached-image writeability are independently proven.
 
 Concrete QEMU implications:
 

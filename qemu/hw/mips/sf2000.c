@@ -2607,27 +2607,27 @@ static void sf2000_sdio_synth_writeback_selftest(void)
                 lba);
 }
 
+static void sf2000_sdio_dma_write(uint32_t lba);
+
 static void sf2000_sdio_raw_writeback_selftest(void)
 {
-    uint8_t write_sector[512];
-    uint8_t read_sector[512];
+    uint8_t write_sector[1024];
+    uint8_t read_sector[1024];
     uint32_t lba = 0x10;
+    const hwaddr dma_addr = 0x00001000ULL;
     int ret;
 
     memset(write_sector, 0x5a, sizeof(write_sector));
     memset(read_sector, 0, sizeof(read_sector));
 
-    ret = blk_pwrite(sf2000_sdio_blk, (int64_t)lba * 512,
-                     sizeof(write_sector), write_sector, 0);
-    if (ret < 0) {
-        error_report("sf2000: raw SD probe writeback selftest failed write lba=%u ret=%d",
-                     lba, ret);
-        return;
-    }
+    cpu_physical_memory_write(dma_addr, write_sector, sizeof(write_sector));
+    sf2000_sdio_dma_addr = dma_addr;
+    sf2000_sdio_dma_len = sizeof(write_sector);
+    sf2000_sdio_dma_write(lba);
 
     ret = blk_flush(sf2000_sdio_blk);
     if (ret < 0) {
-        error_report("sf2000: raw SD probe writeback selftest failed flush lba=%u ret=%d",
+        error_report("sf2000: raw SD probe DMA writeback selftest failed flush lba=%u ret=%d",
                      lba, ret);
         return;
     }
@@ -2635,12 +2635,13 @@ static void sf2000_sdio_raw_writeback_selftest(void)
     ret = blk_pread(sf2000_sdio_blk, (int64_t)lba * 512,
                     sizeof(read_sector), read_sector, 0);
     if (ret < 0 || memcmp(write_sector, read_sector, sizeof(write_sector)) != 0) {
-        error_report("sf2000: raw SD probe writeback selftest failed verify lba=%u ret=%d",
+        error_report("sf2000: raw SD probe DMA writeback selftest failed verify lba=%u ret=%d",
                      lba, ret);
         return;
     }
 
-    info_report("sf2000: raw SD probe writeback selftest ok lba=%u", lba);
+    info_report("sf2000: raw SD probe DMA writeback selftest ok lba=%u sectors=2",
+                lba);
 }
 
 static bool sf2000_sdio_read_sector(uint32_t lba, uint8_t sector[512])
