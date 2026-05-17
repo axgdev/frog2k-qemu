@@ -521,7 +521,7 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
     { 0x8035a794, 0x8035f97c, "run_game" },
     { 0x8035f97c, 0x80365c34, "unwqw_decompress" },
     { 0x80355770, 0x80355b50, "security_check" },
-    { 0x047c0050, 0x047d0000, "storage_probe" },
+    { 0x047a0050, 0x047d0000, "storage_probe" },
 };
 
 #define SF2000_PROGRESS_PHYS      0x013f0000ULL
@@ -547,6 +547,41 @@ typedef struct SF2000ProgressLog {
     uint32_t reserved[3];
     SF2000ProgressEntry entries[SF2000_PROGRESS_ENTRIES];
 } SF2000ProgressLog;
+
+static void sf2000_trace_progress_log(void);
+
+static MemoryRegion sf2000_progress_region;
+static uint8_t sf2000_progress_shadow[sizeof(SF2000ProgressLog)];
+
+static uint64_t sf2000_progress_region_read(void *opaque, hwaddr addr,
+                                            unsigned size)
+{
+    uint64_t value = 0;
+
+    memcpy(&value, sf2000_progress_shadow + addr, size);
+    return value;
+}
+
+static void sf2000_progress_region_write(void *opaque, hwaddr addr,
+                                         uint64_t value, unsigned size)
+{
+    memcpy(sf2000_progress_shadow + addr, &value, size);
+    sf2000_trace_progress_log();
+}
+
+static const MemoryRegionOps sf2000_progress_region_ops = {
+    .read = sf2000_progress_region_read,
+    .write = sf2000_progress_region_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+};
 
 static hwaddr sf2000_guest_phys_addr(uint32_t vaddr)
 {
@@ -753,6 +788,9 @@ static void sf2000_trace_progress_log(void)
         return;
     }
 
+    if (sf2000_last_progress_valid && seq < sf2000_last_progress_seq) {
+        sf2000_last_progress_valid = false;
+    }
     start_seq = sf2000_last_progress_valid ? sf2000_last_progress_seq + 1u : 1u;
     if (start_seq > seq) {
         sf2000_last_progress_seq = seq;
@@ -4054,6 +4092,11 @@ static void sf2000_init(MachineState *machine)
     memory_region_init_ram(ram, NULL, "sf2000.ram", machine->ram_size,
                            &error_fatal);
     memory_region_add_subregion(sysmem, SF2000_RAM_BASE, ram);
+    memory_region_init_io(&sf2000_progress_region, NULL,
+                          &sf2000_progress_region_ops, NULL,
+                          "sf2000.progress", sizeof(sf2000_progress_shadow));
+    memory_region_add_subregion_overlap(sysmem, SF2000_PROGRESS_PHYS,
+                                        &sf2000_progress_region, 1);
     sf2000_seed_boot_handoff();
 
     memory_region_init_io(mmio, NULL, &sf2000_unimp_ops, NULL,
