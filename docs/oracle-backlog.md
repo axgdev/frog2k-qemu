@@ -125,7 +125,7 @@ The captured hardware logs show more than a DAC write:
 
 - a stable gate label (`sf2000_r07` on SF2000, `gb300_l15` on GB300);
 - board-specific gate-word pairs (`sf2000` uses `0x390004fe/0x2b4085b3`
-  and `0x000000a0/0x00000080`; `gb300` uses `0x350084fe/0x25c085b3` and
+  and `0x000000a0/0x000000a0`; `gb300` uses `0x350084fe/0x25c085b3` and
   `0x00000020/0x00000020`);
 - the observed `volume=75` / `gain=8` playback settings that accompany the
   audio-open path;

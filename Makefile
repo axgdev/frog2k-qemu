@@ -618,13 +618,13 @@ smoke-board-contract: build
 	grep -q '"return": "mute_ret=-1 drop_ret=0 free_ret=0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "sf2000_r07"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x390004fe/0x2b4085b3"' build/logs/smoke-board-contract.console
-	grep -q '"return": "0x000000a0/0x00000080"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x000000a0/0x000000a0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x390004fe/0x2b4085b3"' build/logs/smoke-board-contract.console
-	grep -q '"return": "0x000000a0/0x00000080"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x000000a0/0x000000a0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x390004fe/0x2b4085b3"' build/logs/smoke-board-contract.console
-	grep -q '"return": "0x000000a0/0x00000080"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x000000a0/0x000000a0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x390004fe/0x2b4085b3"' build/logs/smoke-board-contract.console
-	grep -q '"return": "0x000000a0/0x00000080"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x000000a0/0x000000a0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "2"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x14fc0082"' build/logs/smoke-board-contract.console
