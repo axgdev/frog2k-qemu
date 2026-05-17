@@ -161,8 +161,8 @@ The captured hardware logs show more than a DAC write:
     active variants, but that still only captures the active-variant contract
     and not the full analog chain;
   - the boot-checked mute/power transition self-test now verifies the reset
-  muted state before firmware runs, but it is still only a contract check and
-  not a full analog implementation;
+  muted state before firmware runs, and the boot-checked PCM waveform selftest
+  now verifies the generator, but the analog chain is still not fully modeled;
 - a fixed 32 kHz, mono-left, 1024-frame, 8-period playback contract;
 - PWM/backlight activity that travels alongside the audio probe.
 

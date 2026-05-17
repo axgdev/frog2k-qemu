@@ -81,8 +81,9 @@ until a board selector is needed. The next modelable board differences are:
   observed mute gate as `audio-muted` (true at reset until the audio path is
   powered), plus the runtime gate state as `audio-gate-state`, and the
   runtime live gate snapshot as `audio-gate-l-live` and `audio-gate-r-live`,
-  both of which are boot-checked as part of the audio contract, and the
-  observed mono-left playback
+  both of which are boot-checked as part of the audio contract. The live
+  backend also self-tests the generated PCM waveform path so the waveform
+  generator stays visible during boot, and the observed mono-left playback
   contract as read-only `audio-sample-rate`,
   `audio-channels`, `audio-period-frames`, `audio-periods`,
   `audio-i2s-ctrl3c`, and `audio-i2s-fade90` properties, but it still needs the

@@ -129,8 +129,9 @@ strong oracle:
   rather than just making the contract visible. The captured gate route is
   board-specific: `sf2000_r07` on SF2000 and `gb300_l15` on GB300. The audio
   mute/power transition is now boot-checked too, and the runtime gate state
-  plus live gate-word snapshot are now queryable and boot-checked, but the
-  analog chain and guest-driven PCM behavior remain open.
+  plus live gate-word snapshot are now queryable and boot-checked. The live
+  backend PCM generator is now boot-checked as well, but the analog chain and
+  guest-driven PCM behavior remain open.
   The PWM2/backlight on/off state is now boot-checked through the scanout
   blanking path, so the display model proves the off-state effect instead of
   only the register snapshot. The USB reset block is now boot-checked as

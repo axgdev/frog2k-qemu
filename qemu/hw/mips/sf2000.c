@@ -447,6 +447,23 @@ static void sf2000_audio_set_backend_active(void)
     }
 }
 
+static int16_t sf2000_audio_render_sample(void)
+{
+    uint32_t volume = sf2000_audio_volume ? sf2000_audio_volume : 75;
+    uint32_t gain = sf2000_audio_gain ? sf2000_audio_gain : 8;
+    int32_t scaled = 0x0800;
+
+    scaled = (scaled * (int32_t)gain) / 8;
+    scaled = (scaled * (int32_t)volume) / 75;
+    if (scaled > INT16_MAX) {
+        scaled = INT16_MAX;
+    }
+
+    sf2000_audio_wave_phase += sf2000_audio_wave_step;
+    return (sf2000_audio_wave_phase & 0x80000000u) ?
+           -(int16_t)scaled : (int16_t)scaled;
+}
+
 static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->audio_route);
@@ -795,9 +812,6 @@ static void sf2000_audio_callback(void *opaque, int free)
     int16_t sample_buf[256 * 2];
     unsigned channels = sf2000_board_profile_spec()->audio_channels ?
                         sf2000_board_profile_spec()->audio_channels : 1;
-    uint32_t volume = sf2000_audio_volume ? sf2000_audio_volume : 75;
-    uint32_t gain = sf2000_audio_gain ? sf2000_audio_gain : 8;
-    int32_t amplitude = 0x0800;
 
     (void)opaque;
 
@@ -816,15 +830,7 @@ static void sf2000_audio_callback(void *opaque, int free)
 
         for (size_t i = 0; i < frames; i++) {
             int16_t sample;
-            int32_t scaled = amplitude;
-
-            scaled = (scaled * (int32_t)gain) / 8;
-            scaled = (scaled * (int32_t)volume) / 75;
-            if (scaled > INT16_MAX) {
-                scaled = INT16_MAX;
-            }
-            sample = (sf2000_audio_wave_phase & 0x80000000u) ?
-                     -(int16_t)scaled : (int16_t)scaled;
+            sample = sf2000_audio_render_sample();
 
             sample_buf[i * channels] = sample;
             if (channels > 1) {
@@ -845,6 +851,36 @@ static void sf2000_audio_callback(void *opaque, int free)
             break;
         }
     }
+}
+
+static void sf2000_audio_pcm_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered = sf2000_audio_powered;
+    uint32_t saved_fade = sf2000_audio_i2s_fade90;
+    uint32_t saved_phase = sf2000_audio_wave_phase;
+    int16_t sample0;
+    int16_t sample1;
+
+    sf2000_audio_wave_phase = 0;
+    sample0 = sf2000_audio_render_sample();
+    sf2000_audio_wave_phase = 0x80000000u;
+    sample1 = sf2000_audio_render_sample();
+    if (sample0 != 0x0800 || sample1 != -0x0800) {
+        error_report("sf2000: audio pcm selftest failed board=%s samples=%d/%d",
+                     profile->name, sample0, sample1);
+        goto restore;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio pcm selftest ok board=%s sample0=%d sample1=%d\n",
+                  profile->name, sample0, sample1);
+
+restore:
+    sf2000_audio_wave_phase = saved_phase;
+    sf2000_audio_powered = saved_powered;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
 }
 
 static void sf2000_audio_backend_init(MachineState *machine)
@@ -5843,6 +5879,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_regs[0][0x384 >> 2] = sf2000_board_profile_spec()->usb_phy384;
     sf2000_usb_regs[1][0x384 >> 2] = sf2000_board_profile_spec()->usb_phy384;
     sf2000_audio_state_selftest();
+    sf2000_audio_pcm_selftest();
     sf2000_audio_gate_live_selftest();
     sf2000_audio_gate_live_variant_selftest();
     sf2000_audio_hw_close_selftest();
