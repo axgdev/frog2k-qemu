@@ -63,9 +63,10 @@ strong oracle:
   still blocked before `sf2000-screen: main entry` by a repeated
   `epc=0x047c0050` TLB fault loop;
 - writable storage semantics, including mirrored FAT updates and MMC ioctl
-  write paths; the current Linux storage probes still stall before their first
-  syscall-visible marker in a repeated `epc=0x047c0050` TLB loop, so the
-  storage oracle remains provisional until the startup/syscall path is fixed;
+  write paths; the current Linux storage fastprobe reaches its startup marker
+  but cannot mount `devtmpfs`, `proc`, or `sysfs`, and never sees a
+  `/dev/mmcblk0` node, so the storage oracle remains provisional until the
+  init-mount/device-node path is fixed;
 - audio and amplifier routing;
 - USB host and gadget behavior;
 - state capture or snapshots for skip-ahead testing;

@@ -21,15 +21,13 @@ write tests and mirrored FAT updates after validating the geometry in
 read-only mode. That means QEMU should treat writable FAT behavior as part of
 the first-class storage oracle, not as a corner case.
 
-Current verification status: the existing buildroot ASD smoke reaches `/init`
-and the binfmt_flat handoff, but the captured log from the current runs still
-does not show the storage-probe markers. The minimal
-`sf2000-storage-fastprobe` entry bytes are now visible in QEMU, so the flat
-loader is handing off the expected code, but execution still stalls on the
-first syscall before any marker can print. The repeated
-`epc=0x047c0050` TLB loop therefore points to a startup/syscall-path problem,
-not a probe-body problem, and the storage launch path remains provisional
-until that layer is fixed.
+Current verification status: the current `rdinit=/usr/sbin/sf2000-storage-fastprobe`
+smoke reaches `probe begin`, but the probe cannot mount `devtmpfs`, `proc`, or
+`sysfs`, and it never sees a `/dev/mmcblk0` node materialize. The probe keeps
+printing `waiting mmc device` for 30 seconds and then exits at the same
+`open failed` / `sysfs dev open failed` point, so the remaining blocker is now
+an init-mount / device-node exposure problem rather than a probe-body readback
+problem.
 
 Concrete QEMU implications:
 
