@@ -235,6 +235,7 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t panel_id;
     uint32_t panel_probe_sig1;
     uint32_t panel_probe_sig2;
+    const char *gpio_init;
     const char *audio_route;
     const char *audio_open_route;
     const char *audio_gate_route;
@@ -273,6 +274,9 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .panel_id = 0x00858552,
         .panel_probe_sig1 = 0xf3f3f2f2,
         .panel_probe_sig2 = 0x00000004,
+        .gpio_init = "l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 "
+                     "mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 "
+                     "mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7",
         .audio_route = "sf2000-default-amp",
         .audio_open_route = "sf2000_left_only",
         .audio_gate_route = "sf2000_r07",
@@ -309,6 +313,9 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .panel_id = 0x00009306,
         .panel_probe_sig1 = 0x00000000,
         .panel_probe_sig2 = 0x00000005,
+        .gpio_init = "l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 "
+                     "mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 "
+                     "mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7",
         .audio_route = "gb300-family-amp",
         .audio_open_route = "sf2000_left_only",
         .audio_gate_route = "gb300_l15",
@@ -514,6 +521,11 @@ static char *sf2000_machine_panel_probe_sig1_get(Object *obj, Error **errp)
 static char *sf2000_machine_panel_probe_sig2_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->panel_probe_sig2);
+}
+
+static char *sf2000_machine_gpio_init_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->gpio_init);
 }
 
 static uint32_t sf2000_gpio_l_out;
@@ -5416,13 +5428,14 @@ static void sf2000_init(MachineState *machine)
     sf2000_audio_state_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
-    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x audio=%s open=%s sr=%u ch=%u "
+    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u",
                 sf2000_board_profile_name(),
                 sf2000_board_profile_spec()->panel_id,
                 sf2000_board_profile_spec()->panel_probe_sig1,
                 sf2000_board_profile_spec()->panel_probe_sig2,
+                sf2000_board_profile_spec()->gpio_init,
                 sf2000_board_profile_spec()->audio_route,
                 sf2000_board_profile_spec()->audio_open_route,
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
@@ -5534,6 +5547,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_panel_probe_sig1_get, NULL);
     object_class_property_add_str(oc, "panel-probe-sig2",
                                   sf2000_machine_panel_probe_sig2_get, NULL);
+    object_class_property_add_str(oc, "gpio-init",
+                                  sf2000_machine_gpio_init_get, NULL);
     object_class_property_add_str(oc, "gpio-l-out",
                                   sf2000_machine_gpio_l_out_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-ctrl3c",

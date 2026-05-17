@@ -55,6 +55,7 @@ These targets establish the current baseline for:
 - GMA scanout and panel setup;
 - board-profile, panel identity/timing, and topology metadata through QMP property queries;
 - the generic GPIO-L output latch through QMP so keypad and board-mux writes can be observed directly;
+- the captured platform GPIO init snapshot through QMP so the reset mux state is visible directly;
 - the captured audio mux-open latch snapshot through QMP so audio board-state changes stay visible;
 - the captured audio hardware open snapshot through QMP so the backend handshake stays visible;
 - the captured audio open-route snapshot through QMP so the mono-left playback path stays visible;
