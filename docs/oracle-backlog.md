@@ -56,10 +56,11 @@ panel-specific fastprobe or equivalent minimal launch path is added.
 
 The hardware-probe history shows initialized root hubs without downstream
 devices, with the root devices named `musb-hdrc.0.auto` and
-`musb-hdrc.1.auto` in the live probe logs. The current Linux smoke still only
-shows the generic USB core plus EHCI/OHCI driver registration; it does not
-bind an SF2000 MUSB controller at all, so the next USB step is a board-specific
-MUSB glue/PHY binding rather than more sysfs-name churn.
+`musb-hdrc.1.auto` in the live probe logs. The current Linux fastprobe now
+proves the SF2000 MUSB glue registers both controller windows and emits
+controller-access traces, but it still does not validate downstream host/device
+enumeration or any PHY-specific quirks. The next USB step is real host/device
+behavior rather than more sysfs-name churn.
 
 ## Priority 4: Skip-Ahead Workflows
 

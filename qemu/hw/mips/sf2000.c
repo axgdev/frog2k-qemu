@@ -494,6 +494,7 @@ static uint8_t sf2000_i2c_data[2];
 static uint32_t sf2000_pwm_clk_ctrl;
 static SF2000PWMChannel sf2000_pwm_channel[SF2000_PWM_CHANNELS];
 static uint32_t sf2000_usb_regs[2][SF2000_USB_REG_COUNT];
+static bool sf2000_usb_access_reported[2];
 static uint8_t sf2000_irc_fifo_cfg;
 static uint8_t sf2000_irc_ier;
 static uint8_t sf2000_irc_isr;
@@ -1153,6 +1154,12 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
     }
 
     value = sf2000_usb_regs[index][offset >> 2];
+    if (!sf2000_usb_access_reported[index]) {
+        sf2000_usb_access_reported[index] = true;
+        info_report("sf2000: usb%u controller access=read route=%s offset=0x%02x value=0x%08x",
+                    index, index == 0 ? "micro-usb" : "usb-a",
+                    offset, value);
+    }
     /*
      * The HC15xx DTS exposes two MUSB-like host/peripheral controller windows.
      * On the SF2000 DB-B210 board USB0 is routed to the micro USB connector
@@ -1199,6 +1206,12 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
     old = sf2000_usb_regs[index][offset >> 2];
     sf2000_usb_regs[index][offset >> 2] =
         (old & ~(mask << shift)) | (((uint32_t)value & mask) << shift);
+    if (!sf2000_usb_access_reported[index]) {
+        sf2000_usb_access_reported[index] = true;
+        info_report("sf2000: usb%u controller access=write route=%s offset=0x%02x value=0x%08x",
+                    index, index == 0 ? "micro-usb" : "usb-a",
+                    offset, (uint32_t)value);
+    }
 }
 
 static bool sf2000_pwm_decode(hwaddr full_addr, unsigned *channel,
