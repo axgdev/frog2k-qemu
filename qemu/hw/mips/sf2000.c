@@ -251,6 +251,7 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t audio_hw_backend;
     uint32_t audio_hw_snd0;
     uint32_t audio_hw_dac;
+    const char *audio_hw_close;
     uint32_t audio_volume;
     uint32_t audio_gain;
     uint32_t audio_sample_rate_hz;
@@ -300,6 +301,9 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_hw_backend = 2,
         .audio_hw_snd0 = 0x14fc0082,
         .audio_hw_dac = 0x4200039e,
+        .audio_hw_close = "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 "
+                          "dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 "
+                          "hw_period=0 hw_periods=0",
         .audio_volume = 75,
         .audio_gain = 8,
         .audio_sample_rate_hz = 32000,
@@ -350,6 +354,9 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_hw_backend = 2,
         .audio_hw_snd0 = 0x14fc0082,
         .audio_hw_dac = 0x4200039e,
+        .audio_hw_close = "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 "
+                          "dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 "
+                          "hw_period=0 hw_periods=0",
         .audio_volume = 75,
         .audio_gain = 8,
         .audio_sample_rate_hz = 32000,
@@ -519,6 +526,11 @@ static char *sf2000_machine_audio_hw_snd0_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_hw_dac_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->audio_hw_dac);
+}
+
+static char *sf2000_machine_audio_hw_close_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_hw_close);
 }
 
 static char *sf2000_machine_audio_volume_get(Object *obj, Error **errp)
@@ -1971,6 +1983,25 @@ static void sf2000_usb_phy_snapshot_selftest(void)
                   "sf2000: usb phy snapshot selftest ok board=%s "
                   "usb0=0x%08x/0x%08x usb1=0x%08x/0x%08x\n",
                   profile->name, usb0_utmi, usb0_phy, usb1_utmi, usb1_phy);
+}
+
+static void sf2000_audio_hw_close_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    g_autofree char *hw_close = sf2000_machine_audio_hw_close_get(NULL, NULL);
+    const char *expected =
+        "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 "
+        "dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 hw_period=0 hw_periods=0";
+
+    if (g_strcmp0(hw_close, expected) != 0) {
+        error_report("sf2000: audio hw close selftest failed board=%s got=%s expected=%s",
+                     profile->name, hw_close ? hw_close : "(null)", expected);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio hw close selftest ok board=%s %s\n",
+                  profile->name, hw_close);
 }
 
 static void sf2000_pwm2_backlight_selftest(void)
@@ -5703,6 +5734,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_audio_state_selftest();
     sf2000_audio_gate_live_selftest();
     sf2000_audio_gate_live_variant_selftest();
+    sf2000_audio_hw_close_selftest();
     sf2000_pwm2_backlight_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
@@ -5710,7 +5742,7 @@ static void sf2000_init(MachineState *machine)
     g_autofree char *gate_live_l = sf2000_machine_audio_gate_l_live_get(NULL, NULL);
     g_autofree char *gate_live_r = sf2000_machine_audio_gate_r_live_get(NULL, NULL);
 
-    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s open_returns=%s close_returns=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u "
+    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s open_returns=%s close_returns=%s hw_close=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u "
                 "storage-reset=%s",
@@ -5723,6 +5755,7 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->audio_open_route,
                 sf2000_board_profile_spec()->audio_open_returns,
                 sf2000_board_profile_spec()->audio_close_returns,
+                sf2000_board_profile_spec()->audio_hw_close,
                 sf2000_audio_output_active() ? "open" : "closed",
                 gate_live_l,
                 gate_live_r,
@@ -5816,6 +5849,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_hw_snd0_get, NULL);
     object_class_property_add_str(oc, "audio-hw-dac",
                                   sf2000_machine_audio_hw_dac_get, NULL);
+    object_class_property_add_str(oc, "audio-hw-close",
+                                  sf2000_machine_audio_hw_close_get, NULL);
     object_class_property_add_str(oc, "audio-volume",
                                   sf2000_machine_audio_volume_get, NULL);
     object_class_property_add_str(oc, "audio-gain",
