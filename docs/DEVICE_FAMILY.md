@@ -103,6 +103,8 @@ until a board selector is needed. The next modelable board differences are:
   reflects the powered host-shell state instead of returning only zeroes for
   the status bytes, and the write path distinguishes powered-disconnected from
   session-active so the queryable state mirrors the probe logs more closely.
+  The boot log now also self-tests the USB reset-block readback against the
+  captured powered-disconnected shell on both controllers.
   The current probe evidence points to one powered downstream port per
   controller, with no child device attached.
 - The generic GPIO-L output latch is also exposed as `gpio-l-out` so the

@@ -155,6 +155,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_MUSB_DEVCTL_VBUS    0x18
 #define SF2000_MUSB_DEVCTL_HM      0x04
 #define SF2000_MUSB_DEVCTL_SESSION 0x01
+#define SF2000_MUSB_POWER_RESET_READ (SF2000_MUSB_POWER_SOFTCONN | \
+                                      SF2000_MUSB_POWER_HSENAB)
+#define SF2000_MUSB_DEVCTL_RESET_READ (SF2000_MUSB_DEVCTL_SESSION | \
+                                        SF2000_MUSB_DEVCTL_HM | \
+                                        SF2000_MUSB_DEVCTL_VBUS)
 #define SF2000_DSC_BOOT_BASE   0x18870000ULL
 #define SF2000_DSC_BOOT_SIZE   0x00000010ULL
 #define SF2000_GE_BASE         0x18806000ULL
@@ -1676,6 +1681,39 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
                     offset, (uint32_t)value);
     }
     info_report("sf2000: usb%u state=%s", index, sf2000_usb_link_state_name(index));
+}
+
+static void sf2000_usb_reset_block_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t usb0_power;
+    uint32_t usb0_devctl;
+    uint32_t usb1_power;
+    uint32_t usb1_devctl;
+
+    usb0_power = sf2000_usb_read(SF2000_USB0_BASE + 0x00, 4);
+    usb0_devctl = sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4);
+    usb1_power = sf2000_usb_read(SF2000_USB1_BASE + 0x00, 4);
+    usb1_devctl = sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4);
+
+    if (usb0_power != SF2000_MUSB_POWER_RESET_READ ||
+        usb0_devctl != SF2000_MUSB_DEVCTL_RESET_READ ||
+        usb1_power != SF2000_MUSB_POWER_RESET_READ ||
+        usb1_devctl != SF2000_MUSB_DEVCTL_RESET_READ) {
+        error_report("sf2000: usb reset block selftest failed board=%s "
+                     "usb0=%08x/%08x usb1=%08x/%08x expected=%08x/%08x",
+                     profile->name, usb0_power, usb0_devctl,
+                     usb1_power, usb1_devctl,
+                     SF2000_MUSB_POWER_RESET_READ,
+                     SF2000_MUSB_DEVCTL_RESET_READ);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: usb reset block selftest ok board=%s usb0=0x%08x/0x%08x "
+                  "usb1=0x%08x/0x%08x\n",
+                  profile->name, usb0_power, usb0_devctl,
+                  usb1_power, usb1_devctl);
 }
 
 static bool sf2000_pwm_decode(hwaddr full_addr, unsigned *channel,
@@ -5255,6 +5293,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_powered[1] = true;
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
+    sf2000_usb_reset_block_selftest();
     info_report("sf2000: board profile=%s panel=0x%08x audio=%s open=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u",

@@ -79,9 +79,10 @@ enumeration or any PHY-specific quirks. The next USB step is real host/device
 behavior rather than more sysfs-name churn.
 
 The QEMU model already carries the observed reset values for the USB control
-and PHY block as queryable board-contract properties; if future probe work
-finds a mismatch, use those values as the first regression point before adding
-new topology behavior.
+and PHY block as queryable board-contract properties; the reset block is also
+boot-checked against the powered-disconnected shell at init time. If future
+probe work finds a mismatch, use those values as the first regression point
+before adding new topology behavior.
 
 ## Priority 4: Skip-Ahead Workflows
 
