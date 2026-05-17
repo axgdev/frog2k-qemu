@@ -78,6 +78,8 @@ until a board selector is needed. The next modelable board differences are:
   The baseline boot log now prints that audio contract, the gate route, and
   the USB topology in one line so the regression smoke can verify the board
   shape directly.
+  Captured logs currently map the gate route to `sf2000_r07` on SF2000 and
+  `gb300_l15` on GB300.
 - Firmware images: SF2000 stock uses
   `/root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd`; GB300 stock
   firmware is available at

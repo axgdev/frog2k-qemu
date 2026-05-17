@@ -523,7 +523,7 @@ smoke-gb300-display: build check-gb300-asd
 		-d guest_errors,unimp -D build/logs/smoke-gb300-display.log \
 	> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-gb300-display.console
-	grep -q 'sf2000: board profile=gb300 panel=0x00009306 audio=gb300-family-amp sr=44100 ch=1 period=1024/8 gate=sf2000_r07 usb0=micro-usb usb1=usb-a hub=1d6b:0002 ports=1' build/logs/smoke-gb300-display.console
+	grep -q 'sf2000: board profile=gb300 panel=0x00009306 audio=gb300-family-amp sr=44100 ch=1 period=1024/8 gate=gb300_l15 usb0=micro-usb usb1=usb-a hub=1d6b:0002 ports=1' build/logs/smoke-gb300-display.console
 	grep -q 'sf2000: panel readback selftest ok board=gb300 panel=0x00009306' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: lcd profile=gb300 panel=0x00009306 geometry=240x320' build/logs/smoke-gb300-display.console
 	grep -q 'uart: L115(board.c):LCD_TYPE_ST7789V_MCU8080' build/logs/smoke-gb300-display.log

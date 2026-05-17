@@ -103,7 +103,7 @@ smoke, but it is still only a contract surface.
 
 The captured hardware logs show more than a DAC write:
 
-- a stable gate label (`sf2000_r07`);
+- a stable gate label (`sf2000_r07` on SF2000, `gb300_l15` on GB300);
 - board-side mux state changes around mute/unmute and volume changes;
 - a fixed 44.1 kHz, mono-left, 1024-frame, 8-period playback contract;
 - PWM/backlight activity that travels alongside the audio probe.

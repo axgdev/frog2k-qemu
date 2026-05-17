@@ -108,7 +108,8 @@ strong oracle:
   properties. The baseline boot log now prints the resolved audio and USB
   topology data, and QEMU now opens a live audio backend sink, so the
   remaining work is the full amplifier chain and guest-driven PCM behavior
-  rather than just making the contract visible.
+  rather than just making the contract visible. The captured gate route is
+  board-specific: `sf2000_r07` on SF2000 and `gb300_l15` on GB300.
 - direct snapshot ergonomics if we decide to wrap the current QMP migration
   flow in a shorter, less QMP-specific resume path.
 
