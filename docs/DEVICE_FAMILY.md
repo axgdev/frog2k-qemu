@@ -53,15 +53,17 @@ until a board selector is needed. The next modelable board differences are:
   rotated or mirrored init mistakes. QEMU now has an explicit `board-profile`
   selector, and GB300 display tests use `board-profile=gb300` so the rotated
   240x320 geometry comes from board data instead of a hidden firmware quirk.
-  The same profile record now carries the current audio and USB route labels so
-  the family-specific wiring is visible in one place.
+  The same profile record now carries the current audio and USB route labels,
+  and the machine exposes them as read-only `audio-route`, `usb0-route`, and
+  `usb1-route` properties so the family-specific wiring is visible in one
+  place.
 - Input matrix: keep local L23/L24 shift-register scanning separate from the
   GPIO-bitbanged RF bus on L27/L28/L29. GB300-family USB gamepad support should
   be modeled as a separate USB host path, not mixed into the RF receiver.
 - Audio and amplifier routing: UniFrog already uses LCD ID clues for board
-  routing. The explicit board profile now carries the route labels, but the
-  emulator still needs real audio behavior before this becomes a functional
-  model.
+  routing. The explicit board profile now carries the route labels and exposes
+  them as machine properties, but the emulator still needs real audio behavior
+  before this becomes a functional model.
 - Firmware images: SF2000 stock uses
   `/root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd`; GB300 stock
   firmware is available at

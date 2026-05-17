@@ -261,6 +261,21 @@ static const char *sf2000_board_profile_name(void)
     return sf2000_board_profile_spec()->name;
 }
 
+static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_route);
+}
+
+static char *sf2000_machine_usb0_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->usb0_route);
+}
+
+static char *sf2000_machine_usb1_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->usb1_route);
+}
+
 typedef struct SF2000RegDefault {
     hwaddr addr;
     uint32_t value;
@@ -4375,6 +4390,12 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_str(oc, "board-profile",
                                   sf2000_machine_board_profile_get,
                                   sf2000_machine_board_profile_set);
+    object_class_property_add_str(oc, "audio-route",
+                                  sf2000_machine_audio_route_get, NULL);
+    object_class_property_add_str(oc, "usb0-route",
+                                  sf2000_machine_usb0_route_get, NULL);
+    object_class_property_add_str(oc, "usb1-route",
+                                  sf2000_machine_usb1_route_get, NULL);
 }
 
 static const TypeInfo sf2000_machine_type = {
