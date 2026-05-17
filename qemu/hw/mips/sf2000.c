@@ -259,6 +259,7 @@ static char *sf2000_board_profile = NULL;
 static bool sf2000_audio_powered;
 static uint32_t sf2000_audio_dac_value;
 static bool sf2000_audio_dac_written;
+static bool sf2000_usb_link_powered[2];
 static bool sf2000_usb_link_active[2];
 
 static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
@@ -333,12 +334,20 @@ static char *sf2000_machine_usb1_route_get(Object *obj, Error **errp)
 
 static char *sf2000_machine_usb0_state_get(Object *obj, Error **errp)
 {
-    return g_strdup(sf2000_usb_link_active[0] ? "active" : "disconnected");
+    if (sf2000_usb_link_active[0]) {
+        return g_strdup("session-active");
+    }
+    return g_strdup(sf2000_usb_link_powered[0] ? "powered-disconnected"
+                                               : "disconnected");
 }
 
 static char *sf2000_machine_usb1_state_get(Object *obj, Error **errp)
 {
-    return g_strdup(sf2000_usb_link_active[1] ? "active" : "disconnected");
+    if (sf2000_usb_link_active[1]) {
+        return g_strdup("session-active");
+    }
+    return g_strdup(sf2000_usb_link_powered[1] ? "powered-disconnected"
+                                               : "disconnected");
 }
 
 typedef struct SF2000RegDefault {
@@ -1273,6 +1282,7 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
     sf2000_usb_regs[index][offset >> 2] =
         (old & ~(mask << shift)) | (((uint32_t)value & mask) << shift);
     if (offset == 0x00 || offset == 0x60) {
+        sf2000_usb_link_powered[index] = value != 0;
         sf2000_usb_link_active[index] = value != 0;
     }
     if (!sf2000_usb_access_reported[index]) {
