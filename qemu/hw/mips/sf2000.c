@@ -521,7 +521,8 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
     { 0x8035a794, 0x8035f97c, "run_game" },
     { 0x8035f97c, 0x80365c34, "unwqw_decompress" },
     { 0x80355770, 0x80355b50, "security_check" },
-    { 0x80002194, 0x80002280, "storage_probe_entry" },
+    { 0x047c0050, 0x047c00c0, "storage_probe_entry" },
+    { 0x047ca560, 0x047caf00, "storage_probe_main" },
     { 0x047a0050, 0x047d0000, "storage_probe" },
 };
 
@@ -2933,6 +2934,11 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
     } else if (full_addr == 0x1884c030) {
         value = sf2000_sdio_xfer_done ? 0x2c :
                 (sf2000_sdio_xfer_busy ? 0x21 : 0x20);
+        if (sf2000_trace_sdio()) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: sdio-reg-read addr=0x%08lx value=0x%08lx size=%u\n",
+                          (unsigned long)full_addr, (unsigned long)value, size);
+        }
     } else if (sf2000_ge_decode(full_addr)) {
         uint32_t ge_value;
 
@@ -3198,6 +3204,11 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_sdio_dma_addr = value;
     } else if (full_addr == 0x1884c028) {
         sf2000_sdio_dma_len = value;
+        if (sf2000_trace_sdio()) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: sdio-reg-write addr=0x%08lx value=0x%08lx size=%u\n",
+                          (unsigned long)full_addr, (unsigned long)value, size);
+        }
     } else if (full_addr == 0x1884c00b && (value & 0x04)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = false;
@@ -3213,8 +3224,18 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = false;
         sf2000_sdio_irq_pending = false;
+        if (sf2000_trace_sdio()) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: sdio-reg-write addr=0x%08lx value=0x%08lx size=%u\n",
+                          (unsigned long)full_addr, (unsigned long)value, size);
+        }
     } else if (full_addr == 0x1884c000 && (value & 1)) {
         sf2000_sdio_complete_cmd();
+        if (sf2000_trace_sdio()) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: sdio-reg-write addr=0x%08lx value=0x%08lx size=%u\n",
+                          (unsigned long)full_addr, (unsigned long)value, size);
+        }
     }
 
     sf2000_update_irq();
