@@ -22,21 +22,24 @@ read-only mode. That means QEMU should treat writable FAT behavior as part of
 the first-class storage oracle, not as a corner case.
 
 Current verification status: the current `rdinit=/usr/sbin/sf2000-storage-fastprobe`
-smoke now proves the HC15 host bind and early command path. The log shows
-`hc15-probe`, `HC15 SD/MMC host registered`, and the SDIO command-register
-writes at `0x1884c004` and `0x1884c002`. The remaining work is to keep those
-controller-level traces stable while deciding whether the initrd/device-node
-path should remain a separate smoke. A later supervisor-cloned launch attempt
-still did not surface `sf2000_storage_fastprobe: probe begin`, and the newer
-direct `rdinit=/usr/sbin/sf2000-storage-probe` writeback smoke also stalls
-before `stor-start` in the repeated `epc=0x04c00050` loop, so the
-controller-trace oracle remains the only reliable proof for the Linux probe
-body for now. The QEMU no-image fallback now self-tests its synthetic
-writeback path and logs `sf2000: synthetic FAT probe writeback selftest ok`,
-and the new `smoke-stock-fatfs-writeback` raw-image smoke exercises the SDIO
-DMA write path and logs `sf2000: raw SD probe DMA writeback selftest ok
-lba=16 sectors=2` against a temporary raw image, so both fallback and
-attached-image writeability are independently proven.
+launch smoke now proves the kernel-visible handoff into the fastprobe init
+path. The log shows `Run /usr/sbin/sf2000-storage-fastprobe as init process`.
+The controller-trace smoke still proves the HC15 host bind and early command
+path. The log shows `hc15-probe`, `HC15 SD/MMC host registered`, and the SDIO
+command-register writes at `0x1884c004` and `0x1884c002`. The remaining work
+is to keep those controller-level traces stable while deciding whether the
+initrd/device-node path should remain a separate smoke. A later
+supervisor-cloned launch attempt still did not surface
+`sf2000_storage_fastprobe: probe begin`, and the newer direct
+`rdinit=/usr/sbin/sf2000-storage-probe` writeback smoke also stalls before
+`stor-start` in the repeated `epc=0x04c00050` loop, so the controller-trace
+oracle remains the only reliable proof for the Linux probe body for now. The
+QEMU no-image fallback now self-tests its synthetic writeback path and logs
+`sf2000: synthetic FAT probe writeback selftest ok`, and the new
+`smoke-stock-fatfs-writeback` raw-image smoke exercises the SDIO DMA write
+path and logs `sf2000: raw SD probe DMA writeback selftest ok lba=16 sectors=2`
+against a temporary raw image, so both fallback and attached-image
+writeability are independently proven.
 
 Concrete QEMU implications:
 

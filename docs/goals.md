@@ -80,16 +80,17 @@ strong oracle:
   body;
 - writable storage semantics, including mirrored FAT updates and MMC ioctl
   write paths; the current Linux storage fastprobe now proves the HC15
-  controller probe and command-register traffic, but the userspace probe
-  launch remains brittle even when we try the supervisor-cloned path, so the
-  next step is to keep the controller-trace oracle stable while separating it
-  from the initrd/device-node path; the emulator also now self-tests the
-  synthetic no-image writeback path and has an opt-in raw-image writeback
-  smoke through the SDIO DMA path so that both fallback media and attached raw
-  media stay writable, but the guest-side direct `sf2000-storage-probe`
-  writeback smoke is still blocked before `stor-start` in the repeated
-  `epc=0x04c00050` loop, so the mirrored FAT / MMC ioctl path remains
-  unproven;
+  controller probe and command-register traffic, and the fastprobe launch
+  smoke now proves the kernel-visible `rdinit` handoff, but the userspace
+  probe launch remains brittle even when we try the supervisor-cloned path,
+  so the next step is to keep the controller-trace oracle stable while
+  separating it from the initrd/device-node path; the emulator also now
+  self-tests the synthetic no-image writeback path and has an opt-in raw-image
+  writeback smoke through the SDIO DMA path so that both fallback media and
+  attached raw media stay writable, but the guest-side direct
+  `sf2000-storage-probe` writeback smoke is still blocked before `stor-start`
+  in the repeated `epc=0x04c00050` loop, so the mirrored FAT / MMC ioctl path
+  remains unproven;
 - audio and amplifier routing;
 - USB host and gadget behavior; the current Linux fastprobe now proves SF2000
   MUSB controller registration and access tracing, but still does not validate
