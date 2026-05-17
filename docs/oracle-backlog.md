@@ -41,7 +41,11 @@ path and logs `sf2000: raw SD probe DMA writeback selftest ok lba=16 sectors=2`
 against a temporary raw image, so both fallback and attached-image
 writeability are independently proven. QEMU also now exposes the stable
 reset-side storage contract as `storage-reset`, which keeps the boot-state
-snapshot visible without implying the guest writeback path is solved.
+snapshot visible without implying the guest writeback path is solved. The
+Linux-side storage writeback regression now delegates to that QEMU raw-image
+writeback smoke via `smoke-qemu-stock-fatfs-writeback`, so the default Linux
+storage regression path exercises the stronger emulator oracle even while the
+direct guest probe remains available as a separate target.
 
 Concrete QEMU implications:
 

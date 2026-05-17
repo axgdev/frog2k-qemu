@@ -46,6 +46,7 @@ The repository already has useful validation checkpoints:
 - `make smoke-linux-reboot`
 - `make smoke-linux-buildroot-reset-snapshot`
 - `make smoke-linux-buildroot-reset-restore`
+- `make -C ../sf2000_linux smoke-qemu-stock-fatfs-writeback`
 
 These targets establish the current baseline for:
 
@@ -66,6 +67,10 @@ These targets establish the current baseline for:
 - a dedicated reset fastprobe launch path that proves the rdinit handoff for
   skip-ahead work, plus a QMP migration restore smoke that resumes the paused
   machine and reaches a later `entry-bytes storage_probe_entry` trace.
+- the Linux-side storage writeback regression now delegates to the QEMU raw
+  image writeback smoke, so the default storage regression path can exercise
+  the stronger emulator-side oracle even while the direct guest probe remains
+  brittle.
 
 ## Known Gaps
 
