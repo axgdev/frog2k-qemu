@@ -71,6 +71,7 @@ until a board selector is needed. The next modelable board differences are:
   exposes the current `audio-power` state, a live `audio-backend-ready`
   hookup, first `audio-dac-value`, the board-level `audio-gate-route`, the
   observed gate-word pairs as `audio-gate-l` and `audio-gate-r`, and the
+  observed audio volume/gain pair as `audio-volume` and `audio-gain`, and the
   observed mono-left playback contract as read-only `audio-sample-rate`,
   `audio-channels`, `audio-period-frames`, `audio-periods`,
   `audio-i2s-ctrl3c`, and `audio-i2s-fade90` properties, but it still needs the

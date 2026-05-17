@@ -234,6 +234,8 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t audio_gate_l1;
     uint32_t audio_gate_r0;
     uint32_t audio_gate_r1;
+    uint32_t audio_volume;
+    uint32_t audio_gain;
     uint32_t audio_sample_rate_hz;
     uint32_t audio_channels;
     uint32_t audio_period_frames;
@@ -263,6 +265,8 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gate_l1 = 0x2b4085b3,
         .audio_gate_r0 = 0x000000a0,
         .audio_gate_r1 = 0x00000080,
+        .audio_volume = 75,
+        .audio_gain = 8,
         .audio_sample_rate_hz = 44100,
         .audio_channels = 1,
         .audio_period_frames = 1024,
@@ -290,6 +294,8 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gate_l1 = 0x25c085b3,
         .audio_gate_r0 = 0x00000020,
         .audio_gate_r1 = 0x00000020,
+        .audio_volume = 75,
+        .audio_gain = 8,
         .audio_sample_rate_hz = 44100,
         .audio_channels = 1,
         .audio_period_frames = 1024,
@@ -344,6 +350,8 @@ static SWVoiceOut *sf2000_audio_voice;
 static bool sf2000_audio_backend_ready;
 static uint32_t sf2000_audio_wave_phase;
 static uint32_t sf2000_audio_wave_step;
+static uint32_t sf2000_audio_volume;
+static uint32_t sf2000_audio_gain;
 
 static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 {
@@ -367,6 +375,16 @@ static char *sf2000_machine_audio_gate_r_get(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x/0x%08x",
                            sf2000_board_profile_spec()->audio_gate_r0,
                            sf2000_board_profile_spec()->audio_gate_r1);
+}
+
+static char *sf2000_machine_audio_volume_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_audio_volume);
+}
+
+static char *sf2000_machine_audio_gain_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_audio_gain);
 }
 
 static char *sf2000_machine_audio_power_get(Object *obj, Error **errp)
@@ -514,6 +532,9 @@ static void sf2000_audio_callback(void *opaque, int free)
     int16_t sample_buf[256 * 2];
     unsigned channels = sf2000_board_profile_spec()->audio_channels ?
                         sf2000_board_profile_spec()->audio_channels : 1;
+    uint32_t volume = sf2000_audio_volume ? sf2000_audio_volume : 75;
+    uint32_t gain = sf2000_audio_gain ? sf2000_audio_gain : 8;
+    int32_t amplitude = 0x0800;
 
     (void)opaque;
 
@@ -531,8 +552,16 @@ static void sf2000_audio_callback(void *opaque, int free)
         }
 
         for (size_t i = 0; i < frames; i++) {
-            int16_t sample = (sf2000_audio_wave_phase & 0x80000000u) ?
-                             -0x0800 : 0x0800;
+            int16_t sample;
+            int32_t scaled = amplitude;
+
+            scaled = (scaled * (int32_t)gain) / 8;
+            scaled = (scaled * (int32_t)volume) / 75;
+            if (scaled > INT16_MAX) {
+                scaled = INT16_MAX;
+            }
+            sample = (sf2000_audio_wave_phase & 0x80000000u) ?
+                     -(int16_t)scaled : (int16_t)scaled;
 
             sample_buf[i * channels] = sample;
             if (channels > 1) {
@@ -572,6 +601,8 @@ static void sf2000_audio_backend_init(MachineState *machine)
 
     sf2000_audio_wave_step =
         (uint32_t)(((uint64_t)440 << 32) / settings.freq);
+    sf2000_audio_volume = sf2000_board_profile_spec()->audio_volume;
+    sf2000_audio_gain = sf2000_board_profile_spec()->audio_gain;
 
     if (machine->audiodev) {
         sf2000_audio_be = audio_be_by_name(machine->audiodev, &local_err);
@@ -5141,7 +5172,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
     info_report("sf2000: board profile=%s panel=0x%08x audio=%s sr=%u ch=%u "
-                "period=%u/%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
+                "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "usb0=%s usb1=%s hub=%s ports=%u",
                 sf2000_board_profile_name(),
                 sf2000_board_profile_spec()->panel_id,
@@ -5150,6 +5181,8 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->audio_channels,
                 sf2000_board_profile_spec()->audio_period_frames,
                 sf2000_board_profile_spec()->audio_periods,
+                sf2000_board_profile_spec()->audio_volume,
+                sf2000_board_profile_spec()->audio_gain,
                 sf2000_board_profile_spec()->audio_gate_route,
                 sf2000_board_profile_spec()->audio_gate_l0,
                 sf2000_board_profile_spec()->audio_gate_l1,
@@ -5211,6 +5244,10 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_gate_l_get, NULL);
     object_class_property_add_str(oc, "audio-gate-r",
                                   sf2000_machine_audio_gate_r_get, NULL);
+    object_class_property_add_str(oc, "audio-volume",
+                                  sf2000_machine_audio_volume_get, NULL);
+    object_class_property_add_str(oc, "audio-gain",
+                                  sf2000_machine_audio_gain_get, NULL);
     object_class_property_add_str(oc, "audio-power",
                                   sf2000_machine_audio_power_get, NULL);
     object_class_property_add_str(oc, "audio-backend-ready",
