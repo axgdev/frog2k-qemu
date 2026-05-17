@@ -26,7 +26,9 @@ smoke now proves the HC15 host bind and early command path. The log shows
 `hc15-probe`, `HC15 SD/MMC host registered`, and the SDIO command-register
 writes at `0x1884c004` and `0x1884c002`. The remaining work is to keep those
 controller-level traces stable while deciding whether the initrd/device-node
-path should remain a separate smoke.
+path should remain a separate smoke. A later supervisor-cloned launch attempt
+still did not surface `sf2000_storage_fastprobe: probe begin`, so the
+controller-trace oracle remains the only reliable proof for now.
 
 Concrete QEMU implications:
 

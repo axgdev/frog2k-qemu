@@ -73,8 +73,9 @@ strong oracle:
 - writable storage semantics, including mirrored FAT updates and MMC ioctl
   write paths; the current Linux storage fastprobe now proves the HC15
   controller probe and command-register traffic, but the userspace probe
-  launch remains brittle, so the next step is to keep the controller-trace
-  oracle stable while separating it from the initrd/device-node path;
+  launch remains brittle even when we try the supervisor-cloned path, so the
+  next step is to keep the controller-trace oracle stable while separating it
+  from the initrd/device-node path;
 - audio and amplifier routing;
 - USB host and gadget behavior; the current Linux fastprobe now proves SF2000
   MUSB controller registration and access tracing, but still does not validate
