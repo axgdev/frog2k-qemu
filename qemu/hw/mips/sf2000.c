@@ -1585,6 +1585,15 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
     return value;
 }
 
+static const char *sf2000_usb_link_state_name(unsigned index)
+{
+    if (sf2000_usb_link_active[index]) {
+        return "session-active";
+    }
+    return sf2000_usb_link_powered[index] ? "powered-disconnected"
+                                          : "disconnected";
+}
+
 static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
 {
     unsigned index;
@@ -1600,9 +1609,18 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
     old = sf2000_usb_regs[index][offset >> 2];
     sf2000_usb_regs[index][offset >> 2] =
         (old & ~(mask << shift)) | (((uint32_t)value & mask) << shift);
-    if (offset == 0x00 || offset == 0x60) {
-        sf2000_usb_link_powered[index] = value != 0;
-        sf2000_usb_link_active[index] = value != 0;
+    if (offset == 0x00) {
+        bool powered = value != 0;
+        bool active = (value & SF2000_MUSB_POWER_SOFTCONN) != 0;
+
+        sf2000_usb_link_powered[index] = powered;
+        sf2000_usb_link_active[index] = powered && active;
+    } else if (offset == 0x60) {
+        bool powered = (value & SF2000_MUSB_DEVCTL_VBUS) != 0;
+        bool active = (value & SF2000_MUSB_DEVCTL_SESSION) != 0;
+
+        sf2000_usb_link_powered[index] = sf2000_usb_link_powered[index] || powered;
+        sf2000_usb_link_active[index] = active;
     }
     if (!sf2000_usb_access_reported[index]) {
         sf2000_usb_access_reported[index] = true;
@@ -1610,6 +1628,7 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
                     index, index == 0 ? "micro-usb" : "usb-a",
                     offset, (uint32_t)value);
     }
+    info_report("sf2000: usb%u state=%s", index, sf2000_usb_link_state_name(index));
 }
 
 static bool sf2000_pwm_decode(hwaddr full_addr, unsigned *channel,

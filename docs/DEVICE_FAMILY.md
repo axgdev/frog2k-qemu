@@ -101,8 +101,10 @@ until a board selector is needed. The next modelable board differences are:
   `usb-phy3` properties, which line up with the capture values from
   `logprobe0001.txt` and `logprobe0014.txt`. The controller readback now also
   reflects the powered host-shell state instead of returning only zeroes for
-  the status bytes. The current probe evidence points to one powered
-  downstream port per controller, with no child device attached.
+  the status bytes, and the write path distinguishes powered-disconnected from
+  session-active so the queryable state mirrors the probe logs more closely.
+  The current probe evidence points to one powered downstream port per
+  controller, with no child device attached.
 
 ## Current GB300 Boot Status
 
