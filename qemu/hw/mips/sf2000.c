@@ -241,6 +241,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
 };
 
 static char *sf2000_board_profile = NULL;
+static bool sf2000_audio_powered;
 
 static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
 {
@@ -264,6 +265,11 @@ static const char *sf2000_board_profile_name(void)
 static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->audio_route);
+}
+
+static char *sf2000_machine_audio_power_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_audio_powered ? "enabled" : "disabled");
 }
 
 static char *sf2000_machine_usb0_route_get(Object *obj, Error **errp)
@@ -3312,6 +3318,7 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         }
     } else if (full_addr >= SF2000_SND_DAC_BASE &&
                full_addr < SF2000_SND_DAC_BASE + SF2000_SND_DAC_SIZE) {
+        sf2000_audio_powered = value != 0;
         if (!sf2000_audio_setup_logged) {
             sf2000_audio_setup_logged = true;
             info_report("sf2000: audio setup route=%s addr=0x%08" HWADDR_PRIx
@@ -4415,6 +4422,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_board_profile_set);
     object_class_property_add_str(oc, "audio-route",
                                   sf2000_machine_audio_route_get, NULL);
+    object_class_property_add_str(oc, "audio-power",
+                                  sf2000_machine_audio_power_get, NULL);
     object_class_property_add_str(oc, "usb0-route",
                                   sf2000_machine_usb0_route_get, NULL);
     object_class_property_add_str(oc, "usb1-route",

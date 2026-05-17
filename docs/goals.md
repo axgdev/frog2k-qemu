@@ -80,8 +80,9 @@ strong oracle:
   downstream host/device enumeration or any PHY-specific quirks, so this
   remains a board-behavior problem rather than a completed host oracle;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
-  explicit `board-profile` selector, route properties, and the observed audio
-  setup write in the stock display smoke.
+  explicit `board-profile` selector, route properties, the observed audio
+  setup write in the stock display smoke, and the machine-visible
+  `audio-power` state property.
 - direct snapshot ergonomics if we decide to wrap the current QMP migration
   flow in a shorter, less QMP-specific resume path.
 
