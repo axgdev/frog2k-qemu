@@ -22,9 +22,12 @@ read-only mode. That means QEMU should treat writable FAT behavior as part of
 the first-class storage oracle, not as a corner case.
 
 Current verification status: the existing buildroot ASD smoke reaches `/init`
-and the binfmt_flat handoff, but the captured log from the current run still
-does not show the storage-probe markers. A dedicated storage smoke or a longer
-run is still needed before this can be treated as fully exercised.
+and the binfmt_flat handoff, but the captured log from the current runs still
+does not show the storage-probe markers. Even the minimal
+`sf2000-storage-fastprobe` path stalls before its first userspace marker in a
+repeated `epc=0x047c0050` TLB loop, so the storage launch path is still
+provisional and needs a separate startup fix before the write oracle can be
+treated as fully exercised.
 
 Concrete QEMU implications:
 
