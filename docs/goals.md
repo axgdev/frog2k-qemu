@@ -97,11 +97,12 @@ strong oracle:
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible
-  `audio-power`, `audio-dac-value`, `audio-i2s-ctrl3c`, `audio-i2s-fade90`,
-  and audio playback contract properties.
-  The baseline boot log now prints the resolved audio and USB topology data,
-  so the remaining work is the actual playback and enumeration behavior rather
-  than just making the contract visible.
+  `audio-power`, `audio-backend-ready`, `audio-dac-value`,
+  `audio-i2s-ctrl3c`, `audio-i2s-fade90`, and audio playback contract
+  properties. The baseline boot log now prints the resolved audio and USB
+  topology data, and QEMU now opens a live audio backend sink, so the
+  remaining work is the full amplifier chain and guest-driven PCM behavior
+  rather than just making the contract visible.
 - direct snapshot ergonomics if we decide to wrap the current QMP migration
   flow in a shorter, less QMP-specific resume path.
 

@@ -64,11 +64,12 @@ until a board selector is needed. The next modelable board differences are:
   routing. The explicit board profile now carries the route labels and exposes
   them as machine properties, and the stock display smoke now observes the
   startup DAC write as `sf2000: audio setup route=...`. The emulator also
-  exposes the current `audio-power` state, first `audio-dac-value`, and the
-  observed playback contract as read-only `audio-sample-rate`,
-  `audio-channels`, `audio-period-frames`, `audio-periods`,
-  `audio-i2s-ctrl3c`, and `audio-i2s-fade90` properties, but it still needs
-  real audio behavior before this becomes a functional model.
+  exposes the current `audio-power` state, a live `audio-backend-ready`
+  hookup, first `audio-dac-value`, and the observed playback contract as
+  read-only `audio-sample-rate`, `audio-channels`, `audio-period-frames`,
+  `audio-periods`, `audio-i2s-ctrl3c`, and `audio-i2s-fade90` properties, but
+  it still needs the full amplifier chain and guest-driven PCM flow before this
+  becomes a complete functional model.
   The baseline boot log now prints that audio contract and the USB topology in
   one line so the regression smoke can verify the board shape directly.
 - Firmware images: SF2000 stock uses

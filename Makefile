@@ -533,6 +533,7 @@ smoke-board-contract: build
 	(printf '{"execute":"qmp_capabilities"}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"board-profile"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-route"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-backend-ready"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-sample-rate"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-channels"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-period-frames"}}\n'; \
@@ -548,6 +549,7 @@ smoke-board-contract: build
 		> build/logs/smoke-board-contract.console 2>&1 || test $$? -eq 124
 	grep -q '"return": "sf2000"' build/logs/smoke-board-contract.console
 	grep -q '"return": "sf2000-default-amp"' build/logs/smoke-board-contract.console
+	grep -q '"return": "true"' build/logs/smoke-board-contract.console
 	grep -q '"return": "44100"' build/logs/smoke-board-contract.console
 	grep -q '"return": "2"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1024"' build/logs/smoke-board-contract.console

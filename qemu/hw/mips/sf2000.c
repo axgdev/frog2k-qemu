@@ -21,6 +21,7 @@
 #include "hw/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/error-report.h"
+#include "qemu/audio.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "system/block-backend.h"
@@ -294,6 +295,12 @@ static const char *sf2000_board_profile_name(void)
     return sf2000_board_profile_spec()->name;
 }
 
+static AudioBackend *sf2000_audio_be;
+static SWVoiceOut *sf2000_audio_voice;
+static bool sf2000_audio_backend_ready;
+static uint32_t sf2000_audio_wave_phase;
+static uint32_t sf2000_audio_wave_step;
+
 static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->audio_route);
@@ -302,6 +309,11 @@ static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_power_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_audio_powered ? "enabled" : "disabled");
+}
+
+static char *sf2000_machine_audio_backend_ready_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_audio_backend_ready ? "true" : "false");
 }
 
 static char *sf2000_machine_audio_dac_value_get(Object *obj, Error **errp)
@@ -392,6 +404,97 @@ static char *sf2000_machine_usb_root_hub_id_get(Object *obj, Error **errp)
 static char *sf2000_machine_usb_root_hub_ports_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("%u", sf2000_board_profile_spec()->usb_root_hub_ports);
+}
+
+static void sf2000_audio_callback(void *opaque, int free)
+{
+    int16_t sample_buf[256 * 2];
+
+    (void)opaque;
+
+    if (!sf2000_audio_voice || !sf2000_audio_powered) {
+        return;
+    }
+
+    while (free > 0) {
+        size_t frames = MIN((size_t)free / (sizeof(int16_t) * 2),
+                            ARRAY_SIZE(sample_buf) / 2);
+        size_t bytes;
+
+        if (!frames) {
+            break;
+        }
+
+        for (size_t i = 0; i < frames; i++) {
+            int16_t sample = (sf2000_audio_wave_phase & 0x80000000u) ?
+                             -0x0800 : 0x0800;
+
+            sample_buf[i * 2] = sample;
+            sample_buf[i * 2 + 1] = sample;
+            sf2000_audio_wave_phase += sf2000_audio_wave_step;
+        }
+
+        bytes = AUD_write(sf2000_audio_voice, sample_buf,
+                          frames * sizeof(int16_t) * 2);
+        if (!bytes) {
+            break;
+        }
+        free -= bytes;
+        if (bytes < frames * sizeof(int16_t) * 2) {
+            break;
+        }
+    }
+}
+
+static void sf2000_audio_backend_init(MachineState *machine)
+{
+    struct audsettings settings = {
+        .freq = sf2000_board_profile_spec()->audio_sample_rate_hz,
+        .nchannels = sf2000_board_profile_spec()->audio_channels,
+        .fmt = AUDIO_FORMAT_S16,
+        .endianness = 0,
+    };
+    Error *local_err = NULL;
+
+    if (settings.freq == 0 || settings.nchannels == 0) {
+        warn_report("sf2000: audio backend skipped; invalid contract");
+        return;
+    }
+
+    sf2000_audio_wave_step =
+        (uint32_t)(((uint64_t)440 << 32) / settings.freq);
+
+    if (machine->audiodev) {
+        sf2000_audio_be = audio_be_by_name(machine->audiodev, &local_err);
+    } else {
+        sf2000_audio_be = audio_get_default_audio_be(&local_err);
+    }
+    if (!sf2000_audio_be) {
+        warn_report("sf2000: audio backend unavailable: %s",
+                    local_err ? error_get_pretty(local_err) : "unknown");
+        if (local_err) {
+            error_free(local_err);
+        }
+        return;
+    }
+
+    sf2000_audio_voice = AUD_open_out(sf2000_audio_be, sf2000_audio_voice,
+                                      "sf2000.audio", NULL,
+                                      sf2000_audio_callback, &settings);
+    if (!sf2000_audio_voice) {
+        warn_report("sf2000: could not open audio voice");
+        return;
+    }
+
+    sf2000_audio_backend_ready = true;
+    info_report("sf2000: audio backend ready route=%s sample_rate=%u channels=%u "
+                "period=%u/%u",
+                sf2000_board_profile_spec()->audio_route,
+                sf2000_board_profile_spec()->audio_sample_rate_hz,
+                sf2000_board_profile_spec()->audio_channels,
+                sf2000_board_profile_spec()->audio_period_frames,
+                sf2000_board_profile_spec()->audio_periods);
+    AUD_set_active_out(sf2000_audio_voice, sf2000_audio_powered);
 }
 
 typedef struct SF2000RegDefault {
@@ -3502,6 +3605,12 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_audio_powered = value != 0;
         sf2000_audio_dac_value = value;
         sf2000_audio_dac_written = true;
+        if (sf2000_audio_voice) {
+            if (sf2000_audio_powered) {
+                sf2000_audio_wave_phase = 0;
+            }
+            AUD_set_active_out(sf2000_audio_voice, sf2000_audio_powered);
+        }
         if (!sf2000_audio_setup_logged) {
             sf2000_audio_setup_logged = true;
             info_report("sf2000: audio setup route=%s addr=0x%08" HWADDR_PRIx
@@ -4570,6 +4679,7 @@ static void sf2000_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(lcd), 0, SF2000_LCD_MMIO_BASE);
     qemu_input_handler_activate(qemu_input_handler_register(
         lcd, &sf2000_keyboard_handler));
+    sf2000_audio_backend_init(machine);
     sf2000_usb_link_powered[0] = true;
     sf2000_usb_link_powered[1] = true;
     sf2000_usb_link_active[0] = false;
@@ -4626,6 +4736,7 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
     mc->no_parallel = true;
     mc->no_floppy = true;
     mc->no_cdrom = true;
+    machine_add_audiodev_property(mc);
     object_class_property_add_str(oc, "board-profile",
                                   sf2000_machine_board_profile_get,
                                   sf2000_machine_board_profile_set);
@@ -4633,6 +4744,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_route_get, NULL);
     object_class_property_add_str(oc, "audio-power",
                                   sf2000_machine_audio_power_get, NULL);
+    object_class_property_add_str(oc, "audio-backend-ready",
+                                  sf2000_machine_audio_backend_ready_get, NULL);
     object_class_property_add_str(oc, "audio-dac-value",
                                   sf2000_machine_audio_dac_value_get, NULL);
     object_class_property_add_str(oc, "audio-sample-rate",
