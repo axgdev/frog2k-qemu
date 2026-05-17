@@ -45,10 +45,11 @@ init mistakes. QEMU now synthesizes the panel-ID readback path directly;
 remaining work is the timing/readout edge cases around it.
 
 Current verification status: the Linux panel smoke still reaches the
-`/init` handoff and the flat-loader thread start, but it does not reach
-`sf2000-screen: main entry`. The log is currently stuck in a repeated TLB
-exception loop with `epc=0x047c0050`, so the display probe remains
-provisional until the userspace body is observable.
+`/init` handoff and the flat-loader thread start, but it does not reach any
+`sf2000-screen` C-side marker, even after adding a raw `screen-raw-main-entry`
+progress mark. The log is still stuck in a repeated TLB exception loop with
+`epc=0x047c0050`, so the display probe remains provisional until a tiny
+panel-specific fastprobe or equivalent minimal launch path is added.
 
 ## Priority 3: USB Host/Device Topology
 

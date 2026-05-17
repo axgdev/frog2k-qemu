@@ -60,8 +60,9 @@ strong oracle:
 
 - higher-fidelity display timing and any remaining panel-status corner cases
   beyond the synthesized panel-ID readback; the current Linux panel smoke is
-  still blocked before `sf2000-screen: main entry` by a repeated
-  `epc=0x047c0050` TLB fault loop;
+  still blocked before any `sf2000-screen` C-side marker by a repeated
+  `epc=0x047c0050` TLB fault loop, so the next panel pass likely needs a tiny
+  fastprobe rather than the full screen init body;
 - writable storage semantics, including mirrored FAT updates and MMC ioctl
   write paths; the current Linux storage fastprobe now proves the HC15
   controller probe and command-register traffic, but the userspace probe
