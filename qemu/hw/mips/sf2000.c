@@ -155,11 +155,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_MUSB_DEVCTL_VBUS    0x18
 #define SF2000_MUSB_DEVCTL_HM      0x04
 #define SF2000_MUSB_DEVCTL_SESSION 0x01
-#define SF2000_MUSB_POWER_RESET_READ (SF2000_MUSB_POWER_SOFTCONN | \
-                                      SF2000_MUSB_POWER_HSENAB)
-#define SF2000_MUSB_DEVCTL_RESET_READ (SF2000_MUSB_DEVCTL_SESSION | \
-                                        SF2000_MUSB_DEVCTL_HM | \
-                                        SF2000_MUSB_DEVCTL_VBUS)
+#define SF2000_MUSB_POWER_RESET_READ 0x70
+#define SF2000_MUSB_POWER_OFF_READ    0x20
+#define SF2000_MUSB_DEVCTL_RESET_READ 0x99
+#define SF2000_MUSB_DEVCTL_OFF_READ   0x80
 #define SF2000_DSC_BOOT_BASE   0x18870000ULL
 #define SF2000_DSC_BOOT_SIZE   0x00000010ULL
 #define SF2000_GE_BASE         0x18806000ULL
@@ -1840,7 +1839,7 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
     switch (offset) {
     case 0x00: /* FAddr/Power byte lane. */
         value = sf2000_usb_link_powered[index] ?
-            SF2000_MUSB_POWER_SOFTCONN | SF2000_MUSB_POWER_HSENAB : 0;
+            SF2000_MUSB_POWER_RESET_READ : SF2000_MUSB_POWER_OFF_READ;
         break;
     case 0x02: /* IntrTx */
     case 0x04: /* IntrRx */
@@ -1851,9 +1850,7 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
     case 0x60: /* DevCtl */
         if (offset == 0x60) {
             value = sf2000_usb_link_powered[index] ?
-                SF2000_MUSB_DEVCTL_SESSION |
-                SF2000_MUSB_DEVCTL_HM |
-                SF2000_MUSB_DEVCTL_VBUS : 0;
+                SF2000_MUSB_DEVCTL_RESET_READ : SF2000_MUSB_DEVCTL_OFF_READ;
         } else {
             value = sf2000_usb_link_active[index] ? 0x10 : 0;
         }

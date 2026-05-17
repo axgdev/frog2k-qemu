@@ -92,7 +92,9 @@ enumeration and PHY-specific behavior remain open. The live UTMI/PHY snapshot
 is now queryable as `usb0-utmi380`, `usb1-utmi380`, `usb0-phy384`, and
 `usb1-phy384`, and the boot log self-tests that snapshot against the captured
 boot values, but that still only proves controller-state visibility rather
-than actual host/device negotiation.
+than actual host/device negotiation. The boot-time reset shell now reads back
+`POWER=0x70` and `DEVCTL=0x99`, matching the captured powered-disconnected
+snapshot from the probe logs.
 
 ## Priority 4: Skip-Ahead Workflows
 

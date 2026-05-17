@@ -500,7 +500,7 @@ smoke-stock-display: build
 	grep -q 'sf2000: pwm2 backlight selftest ok board=sf2000 clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: pwm2 backlight blank selftest ok board=sf2000 sample=0xff000000' build/logs/smoke-stock-display.console
 	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-stock-display.log
-	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000060/0x0000001d usb1=0x00000060/0x0000001d' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000070/0x00000099 usb1=0x00000070/0x00000099' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: usb phy snapshot selftest ok board=sf2000 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: audio setup route=sf2000-default-amp' build/logs/smoke-stock-display.console
@@ -540,7 +540,7 @@ smoke-gb300-display: build check-gb300-asd
 	grep -q 'sf2000: pwm2 backlight selftest ok board=gb300 clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: pwm2 backlight blank selftest ok board=gb300 sample=0xff000000' build/logs/smoke-gb300-display.console
 	grep -q 'sf2000: panel readback selftest ok board=gb300 panel=0x00009306' build/logs/smoke-gb300-display.log
-	grep -q 'sf2000: usb reset block selftest ok board=gb300 usb0=0x00000060/0x0000001d usb1=0x00000060/0x0000001d' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: usb reset block selftest ok board=gb300 usb0=0x00000070/0x00000099 usb1=0x00000070/0x00000099' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: usb link state selftest ok board=gb300' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: usb phy snapshot selftest ok board=gb300 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: lcd profile=gb300 panel=0x00009306 geometry=240x320' build/logs/smoke-gb300-display.console
@@ -654,8 +654,8 @@ smoke-board-contract: build
 	grep -q '"return": "0x06060606"' build/logs/smoke-board-contract.console
 	grep -q '"return": "mode=safe experimental=0 status=okay clock=198000000 bus-width=1 cap-highspeed=0 supports-highspeed=0 uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 broken-cd=1"' build/logs/smoke-board-contract.console
 	grep -q '"return": "powered-disconnected"' build/logs/smoke-board-contract.console
-	grep -q '"return": "0x0000001d"' build/logs/smoke-board-contract.console
-	grep -q '"return": "0x0000001d"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000099"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000099"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x00570740"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x00570740"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x00000010"' build/logs/smoke-board-contract.console
@@ -663,7 +663,7 @@ smoke-board-contract: build
 	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-board-contract.log
-	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000060/0x0000001d usb1=0x00000060/0x0000001d' build/logs/smoke-board-contract.log
+	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000070/0x00000099 usb1=0x00000070/0x00000099' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: usb phy snapshot selftest ok board=sf2000 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-board-contract.log
 
