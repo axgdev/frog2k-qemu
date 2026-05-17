@@ -229,6 +229,7 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t panel_te_hz;
     uint32_t panel_id;
     const char *audio_route;
+    const char *audio_open_route;
     const char *audio_gate_route;
     uint32_t audio_gate_l0;
     uint32_t audio_gate_l1;
@@ -264,6 +265,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .panel_te_hz = 60,
         .panel_id = 0x00858552,
         .audio_route = "sf2000-default-amp",
+        .audio_open_route = "sf2000_left_only",
         .audio_gate_route = "sf2000_r07",
         .audio_gate_l0 = 0x390004fe,
         .audio_gate_l1 = 0x2b4085b3,
@@ -297,6 +299,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .panel_te_hz = 60,
         .panel_id = 0x00009306,
         .audio_route = "gb300-family-amp",
+        .audio_open_route = "sf2000_left_only",
         .audio_gate_route = "gb300_l15",
         .audio_gate_l0 = 0x350084fe,
         .audio_gate_l1 = 0x25c085b3,
@@ -380,6 +383,11 @@ static void sf2000_audio_set_backend_active(void)
 static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->audio_route);
+}
+
+static char *sf2000_machine_audio_open_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_open_route);
 }
 
 static char *sf2000_machine_audio_gate_route_get(Object *obj, Error **errp)
@@ -683,9 +691,10 @@ static void sf2000_audio_backend_init(MachineState *machine)
     }
 
     sf2000_audio_backend_ready = true;
-    info_report("sf2000: audio backend ready route=%s sample_rate=%u channels=%u "
+    info_report("sf2000: audio backend ready route=%s open_route=%s sample_rate=%u channels=%u "
                 "period=%u/%u",
                 sf2000_board_profile_spec()->audio_route,
+                sf2000_board_profile_spec()->audio_open_route,
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
                 sf2000_board_profile_spec()->audio_channels,
                 sf2000_board_profile_spec()->audio_period_frames,
@@ -5246,12 +5255,13 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_powered[1] = true;
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
-    info_report("sf2000: board profile=%s panel=0x%08x audio=%s sr=%u ch=%u "
+    info_report("sf2000: board profile=%s panel=0x%08x audio=%s open=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u",
                 sf2000_board_profile_name(),
                 sf2000_board_profile_spec()->panel_id,
                 sf2000_board_profile_spec()->audio_route,
+                sf2000_board_profile_spec()->audio_open_route,
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
                 sf2000_board_profile_spec()->audio_channels,
                 sf2000_board_profile_spec()->audio_period_frames,
@@ -5317,6 +5327,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_board_profile_set);
     object_class_property_add_str(oc, "audio-route",
                                   sf2000_machine_audio_route_get, NULL);
+    object_class_property_add_str(oc, "audio-open-route",
+                                  sf2000_machine_audio_open_route_get, NULL);
     object_class_property_add_str(oc, "audio-gate-route",
                                   sf2000_machine_audio_gate_route_get, NULL);
     object_class_property_add_str(oc, "audio-gate-l",
