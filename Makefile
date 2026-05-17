@@ -542,6 +542,8 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-fade90"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-id"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-ports"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-state"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-state"}}\n'; \
 	 printf '{"execute":"quit"}\n') | \
 		timeout 10s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) \
 		-display none -serial none -monitor none -qmp stdio \
@@ -558,6 +560,7 @@ smoke-board-contract: build
 	grep -q '"return": "0x008f0000"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1d6b:0002"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1"' build/logs/smoke-board-contract.console
+	grep -q '"return": "powered-disconnected"' build/logs/smoke-board-contract.console
 
 clean:
 	rm -rf $(QEMU_SRC)/build
