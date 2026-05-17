@@ -503,6 +503,7 @@ smoke-gb300-display: build check-gb300-asd
 		-d guest_errors,unimp -D build/logs/smoke-gb300-display.log \
 		> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-gb300-display.console
+	grep -q 'sf2000: board profile=gb300 audio=gb300-family-amp usb0=micro-usb usb1=usb-a' build/logs/smoke-gb300-display.console
 	grep -q 'sf2000: lcd profile=gb300 geometry=240x320' build/logs/smoke-gb300-display.console
 	grep -q 'uart: L115(board.c):LCD_TYPE_ST7789V_MCU8080' build/logs/smoke-gb300-display.log
 	grep -q 'gma-present .*mode=12' build/logs/smoke-gb300-display.log

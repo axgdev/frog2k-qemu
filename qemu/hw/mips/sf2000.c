@@ -212,16 +212,53 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_RF_CLK_BIT      28
 #define SF2000_RF_CS_BIT       29
 
+typedef struct SF2000BoardProfileSpec {
+    const char *name;
+    uint32_t lcd_width;
+    uint32_t lcd_height;
+    const char *audio_route;
+    const char *usb0_route;
+    const char *usb1_route;
+} SF2000BoardProfileSpec;
+
+static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
+    {
+        .name = "sf2000",
+        .lcd_width = SF2000_LCD_WIDTH,
+        .lcd_height = SF2000_LCD_HEIGHT,
+        .audio_route = "sf2000-default-amp",
+        .usb0_route = "micro-usb",
+        .usb1_route = "usb-a",
+    },
+    {
+        .name = "gb300",
+        .lcd_width = 240,
+        .lcd_height = 320,
+        .audio_route = "gb300-family-amp",
+        .usb0_route = "micro-usb",
+        .usb1_route = "usb-a",
+    },
+};
+
 static char *sf2000_board_profile = NULL;
+
+static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
+{
+    const char *name = sf2000_board_profile ? sf2000_board_profile : "sf2000";
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(sf2000_board_profiles); i++) {
+        if (strcmp(name, sf2000_board_profiles[i].name) == 0) {
+            return &sf2000_board_profiles[i];
+        }
+    }
+
+    return &sf2000_board_profiles[0];
+}
 
 static const char *sf2000_board_profile_name(void)
 {
-    return sf2000_board_profile ? sf2000_board_profile : "sf2000";
-}
-
-static bool sf2000_board_profile_is_gb300(void)
-{
-    return strcmp(sf2000_board_profile_name(), "gb300") == 0;
+    return sf2000_board_profile_spec()->name;
 }
 
 typedef struct SF2000RegDefault {
@@ -3929,18 +3966,13 @@ static const MemoryRegionOps sf2000_lcd_ops = {
 static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
 {
     SF2000LCDState *s = SF2000_LCD(dev);
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
 
-    if (sf2000_board_profile_is_gb300() &&
-        (!s->width || s->width == SF2000_LCD_WIDTH) &&
-        (!s->height || s->height == SF2000_LCD_HEIGHT)) {
-        s->width = 240;
-        s->height = 320;
+    if (!s->width || s->width == SF2000_LCD_WIDTH) {
+        s->width = profile->lcd_width;
     }
-    if (!s->width) {
-        s->width = SF2000_LCD_WIDTH;
-    }
-    if (!s->height) {
-        s->height = SF2000_LCD_HEIGHT;
+    if (!s->height || s->height == SF2000_LCD_HEIGHT) {
+        s->height = profile->lcd_height;
     }
     if (!s->stride) {
         s->stride = s->width * 2;
@@ -4299,6 +4331,11 @@ static void sf2000_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(lcd), 0, SF2000_LCD_MMIO_BASE);
     qemu_input_handler_activate(qemu_input_handler_register(
         lcd, &sf2000_keyboard_handler));
+    info_report("sf2000: board profile=%s audio=%s usb0=%s usb1=%s",
+                sf2000_board_profile_name(),
+                sf2000_board_profile_spec()->audio_route,
+                sf2000_board_profile_spec()->usb0_route,
+                sf2000_board_profile_spec()->usb1_route);
 
     sf2000_sdio_blk = blk_by_name("sd0");
     dinfo = sf2000_sdio_blk ? NULL : drive_get(IF_SD, 0, 0);
