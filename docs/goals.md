@@ -43,6 +43,7 @@ The repository already has useful validation checkpoints:
 - `make smoke-linux-elf`
 - `make smoke-linux-reboot`
 - `make smoke-linux-buildroot-reset-snapshot`
+- `make smoke-linux-buildroot-reset-restore`
 
 These targets establish the current baseline for:
 
@@ -54,7 +55,8 @@ These targets establish the current baseline for:
 - direct Linux ELF boot;
 - Linux watchdog reboot back into the bootloader.
 - a dedicated reset fastprobe launch path that proves the rdinit handoff for
-  skip-ahead work, even though it is still not a full state-capture snapshot.
+  skip-ahead work, plus a QMP migration restore smoke that resumes the paused
+  machine and reaches a later `entry-bytes storage_probe_entry` trace.
 
 ## Known Gaps
 
@@ -73,9 +75,9 @@ strong oracle:
   oracle stable while separating it from the initrd/device-node path;
 - audio and amplifier routing;
 - USB host and gadget behavior;
-- state capture or snapshots for skip-ahead testing, beyond the current
-  launch-only reset fastprobe;
 - board-profile modeling for the family variants that still share one machine.
+- direct snapshot ergonomics if we decide to wrap the current QMP migration
+  flow in a shorter, less QMP-specific resume path.
 
 ## Evidence Sources
 

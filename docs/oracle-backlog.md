@@ -63,8 +63,10 @@ Direct boot and reboot loops are already useful. The remaining work is making
 snapshot or state-resume workflows ergonomic enough that Linux and firmware
 tests do not need to replay the whole boot chain every time.
 
-Current verification status: the Linux tree now has a dedicated
-`rdinit=/usr/sbin/sf2000-reset-fastprobe` launch oracle that proves the handoff
-into a reset-specific initrd binary via `ret-syscall-exit`. That is a useful
-skip-ahead checkpoint, but it is still launch-only and does not yet replace a
-real captured machine state.
+Current verification status: the Linux tree now has both a dedicated
+`rdinit=/usr/sbin/sf2000-reset-fastprobe` launch oracle and a QMP migration
+restore smoke. The restore path pauses a boot checkpoint, saves it to a state
+file, and restarts a second VM from that state until the log shows
+`sf2000: entry-bytes storage_probe_entry pc=0x047c0050`. That closes the basic
+skip-ahead gap; any remaining work here is mostly ergonomics if we want a
+shorter or less QMP-specific resume path.
