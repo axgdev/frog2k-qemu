@@ -57,7 +57,8 @@ until a board selector is needed. The next modelable board differences are:
   route labels, plus the panel TE rate, and the machine exposes them as
   read-only `panel-id`, `panel-te-hz`, `audio-route`, `usb0-route`, and
   `usb1-route` properties so the family-specific wiring, identity, and timing
-  are visible in one place.
+  are visible in one place. The captured panel IDs are board-specific: the
+  SF2000 stock path observes `0x858552`, while GB300 observes `0x009306`.
 - Input matrix: keep local L23/L24 shift-register scanning separate from the
   GPIO-bitbanged RF bus on L27/L28/L29. GB300-family USB gamepad support should
   be modeled as a separate USB host path, not mixed into the RF receiver.
