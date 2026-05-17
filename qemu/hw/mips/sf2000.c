@@ -201,6 +201,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GPIO_L_DIR      0x18800058ULL
 #define SF2000_GPIO_L_ISR      0x1880005cULL
 #define SF2000_GPIO_L08        BIT(8)
+#define SF2000_GPIO_T_IN       0x18800350ULL
 #define SF2000_GPIO_R_IN       0x188000f0ULL
 #define SF2000_GPIO_R_ISR      0x188000fcULL
 #define SF2000_GPIO_R_POK      BIT(30)
@@ -317,6 +318,9 @@ struct SF2000LCDState {
 
     uint32_t gpio54;
     uint32_t gpio354;
+    uint32_t panel_id;
+    bool panel_id_active;
+    unsigned panel_id_step;
     bool panel_wr;
     bool panel_rs;
     uint16_t panel_cmd;
@@ -344,6 +348,7 @@ static uint32_t sf2000_rgb565_to_surface(uint16_t pix);
 static void sf2000_gma_present(uint32_t dmba_addr);
 static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
 static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
+static uint32_t sf2000_panel_gpio_sample(hwaddr full_addr, uint32_t value);
 
 static uint64_t sf2000_cpu_hz(void)
 {
@@ -2665,6 +2670,127 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
     }
 }
 
+static uint32_t sf2000_panel_readback_mask(unsigned step)
+{
+    switch (step) {
+    case 0:
+        return BIT(2);
+    case 1:
+        return BIT(3);
+    case 2:
+        return BIT(4);
+    case 3:
+        return BIT(5);
+    case 4:
+        return BIT(6);
+    case 5:
+        return BIT(9);
+    case 6:
+        return BIT(10);
+    case 7:
+        return BIT(11);
+    case 8:
+        return BIT(12);
+    case 9:
+        return BIT(13);
+    case 10:
+        return BIT(14);
+    case 11:
+        return BIT(2);
+    case 12:
+        return BIT(3);
+    case 13:
+        return BIT(4);
+    case 14:
+        return BIT(5);
+    case 15:
+        return BIT(6);
+    default:
+        return 0;
+    }
+}
+
+static uint8_t sf2000_panel_readback_byte(const SF2000LCDState *s,
+                                          unsigned word)
+{
+    switch (word) {
+    case 0:
+        return 0;
+    case 1:
+        return (s->panel_id >> 16) & 0xffu;
+    case 2:
+        return (s->panel_id >> 8) & 0xffu;
+    case 3:
+        return s->panel_id & 0xffu;
+    default:
+        return 0;
+    }
+}
+
+static uint32_t sf2000_gpio_input_value(hwaddr aligned)
+{
+    uint32_t value = 0;
+    unsigned i;
+
+    for (i = 0; i < ARRAY_SIZE(sf2000_regs); i++) {
+        if (sf2000_regs[i].valid && sf2000_regs[i].addr == aligned) {
+            value = sf2000_regs[i].value;
+            break;
+        }
+    }
+    if (i == ARRAY_SIZE(sf2000_regs)) {
+        for (i = 0; i < ARRAY_SIZE(sf2000_reg_defaults); i++) {
+            if (sf2000_reg_defaults[i].addr == aligned) {
+                value = sf2000_reg_defaults[i].value;
+                break;
+            }
+        }
+    }
+    if (!value && aligned == SF2000_GPIO_L_IN) {
+        value = 0x07800102;
+    }
+    return value;
+}
+
+static uint32_t sf2000_panel_gpio_sample(hwaddr full_addr, uint32_t value)
+{
+    SF2000LCDState *s = sf2000_lcd;
+    hwaddr aligned = full_addr & ~3ULL;
+    unsigned step;
+    unsigned word;
+    uint8_t byte;
+    uint32_t mask;
+
+    if (!s || !s->panel_id_active) {
+        return value;
+    }
+
+    step = s->panel_id_step;
+    if (step >= 64) {
+        s->panel_id_active = false;
+        return value;
+    }
+
+    if (aligned != SF2000_GPIO_L_IN && aligned != SF2000_GPIO_T_IN) {
+        return value;
+    }
+
+    word = step / 16u;
+    mask = sf2000_panel_readback_mask(step % 16u);
+    byte = sf2000_panel_readback_byte(s, word);
+    value &= ~mask;
+    if ((step % 16u) < 8u && (byte & BIT(step % 8u))) {
+        value |= mask;
+    }
+
+    s->panel_id_step++;
+    if (s->panel_id_step >= 64) {
+        s->panel_id_active = false;
+    }
+
+    return value;
+}
+
 static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 {
     if (s->panel_rs) {
@@ -2679,6 +2805,15 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
         qemu_log_mask(LOG_UNIMP,
                       "sf2000: panel-cmd cmd=0x%02x raw=0x%04x count=%u\n",
                       s->panel_cmd, value, s->panel_cmd_count);
+    }
+    if (s->panel_cmd == 0x04) {
+        s->panel_id_active = true;
+        s->panel_id_step = 0;
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: panel-read-id start panel-id=0x%06x\n",
+                      s->panel_id & 0xffffffu);
+    } else {
+        s->panel_id_active = false;
     }
     if (s->panel_cmd == 0x2c) {
         s->panel_x = s->panel_x0;
@@ -2868,16 +3003,14 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         }
     } else if (full_addr == SF2000_IRQ_STATUS2) {
         value = 0;
-    } else if ((full_addr & ~3u) == SF2000_GPIO_L_IN) {
-        value = 0x07800102;
-        for (i = 0; i < ARRAY_SIZE(sf2000_regs); i++) {
-            if (sf2000_regs[i].valid && sf2000_regs[i].addr == SF2000_GPIO_L_IN) {
-                value = sf2000_regs[i].value;
-                break;
-            }
+    } else if ((full_addr & ~3ULL) == SF2000_GPIO_L_IN ||
+               (full_addr & ~3ULL) == SF2000_GPIO_T_IN) {
+        value = sf2000_gpio_input_value(full_addr & ~3ULL);
+        if ((full_addr & ~3ULL) == SF2000_GPIO_L_IN) {
+            value = sf2000_gpio_l_sample(value);
+            value = sf2000_rf_gpio_l_sample(value);
         }
-        value = sf2000_gpio_l_sample(value);
-        value = sf2000_rf_gpio_l_sample(value);
+        value = sf2000_panel_gpio_sample(full_addr, value);
         value >>= ((full_addr & 3u) * 8u);
         if (size < 4) {
             value &= (1u << (size * 8)) - 1u;
@@ -3800,6 +3933,9 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     if (!s->stride) {
         s->stride = s->width * 2;
     }
+    if (!s->panel_id) {
+        s->panel_id = 0x009306u;
+    }
 
     s->as = &address_space_memory;
     s->con = graphic_console_init(dev, 0, &sf2000_lcd_gfx_ops, s);
@@ -3820,6 +3956,7 @@ static const Property sf2000_lcd_properties[] = {
     DEFINE_PROP_UINT32("stride", SF2000LCDState, stride, SF2000_LCD_WIDTH * 2),
     DEFINE_PROP_UINT32("format", SF2000LCDState, format, 0),
     DEFINE_PROP_UINT32("control", SF2000LCDState, control, 0),
+    DEFINE_PROP_UINT32("panel-id", SF2000LCDState, panel_id, 0x009306u),
 };
 
 static void sf2000_lcd_class_init(ObjectClass *klass, const void *data)
