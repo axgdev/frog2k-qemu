@@ -42,6 +42,7 @@ The repository already has useful validation checkpoints:
 - `make smoke-gb300-display`
 - `make smoke-linux-elf`
 - `make smoke-linux-reboot`
+- `make smoke-linux-buildroot-reset-snapshot`
 
 These targets establish the current baseline for:
 
@@ -52,6 +53,8 @@ These targets establish the current baseline for:
 - keypad input delivery;
 - direct Linux ELF boot;
 - Linux watchdog reboot back into the bootloader.
+- a dedicated reset fastprobe launch path that proves the rdinit handoff for
+  skip-ahead work, even though it is still not a full state-capture snapshot.
 
 ## Known Gaps
 
@@ -70,7 +73,8 @@ strong oracle:
   oracle stable while separating it from the initrd/device-node path;
 - audio and amplifier routing;
 - USB host and gadget behavior;
-- state capture or snapshots for skip-ahead testing;
+- state capture or snapshots for skip-ahead testing, beyond the current
+  launch-only reset fastprobe;
 - board-profile modeling for the family variants that still share one machine.
 
 ## Evidence Sources

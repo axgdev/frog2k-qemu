@@ -62,3 +62,9 @@ the physical device proves additional attach behavior.
 Direct boot and reboot loops are already useful. The remaining work is making
 snapshot or state-resume workflows ergonomic enough that Linux and firmware
 tests do not need to replay the whole boot chain every time.
+
+Current verification status: the Linux tree now has a dedicated
+`rdinit=/usr/sbin/sf2000-reset-fastprobe` launch oracle that proves the handoff
+into a reset-specific initrd binary via `ret-syscall-exit`. That is a useful
+skip-ahead checkpoint, but it is still launch-only and does not yet replace a
+real captured machine state.
