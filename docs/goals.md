@@ -64,8 +64,8 @@ strong oracle:
   `epc=0x047c0050` TLB fault loop;
 - writable storage semantics, including mirrored FAT updates and MMC ioctl
   write paths; the current Linux storage probes still stall before their first
-  userspace marker in a repeated `epc=0x047c0050` TLB loop, so the storage
-  oracle remains provisional until the launch path is fixed;
+  syscall-visible marker in a repeated `epc=0x047c0050` TLB loop, so the
+  storage oracle remains provisional until the startup/syscall path is fixed;
 - audio and amplifier routing;
 - USB host and gadget behavior;
 - state capture or snapshots for skip-ahead testing;

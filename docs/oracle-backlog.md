@@ -23,11 +23,13 @@ the first-class storage oracle, not as a corner case.
 
 Current verification status: the existing buildroot ASD smoke reaches `/init`
 and the binfmt_flat handoff, but the captured log from the current runs still
-does not show the storage-probe markers. Even the minimal
-`sf2000-storage-fastprobe` path stalls before its first userspace marker in a
-repeated `epc=0x047c0050` TLB loop, so the storage launch path is still
-provisional and needs a separate startup fix before the write oracle can be
-treated as fully exercised.
+does not show the storage-probe markers. The minimal
+`sf2000-storage-fastprobe` entry bytes are now visible in QEMU, so the flat
+loader is handing off the expected code, but execution still stalls on the
+first syscall before any marker can print. The repeated
+`epc=0x047c0050` TLB loop therefore points to a startup/syscall-path problem,
+not a probe-body problem, and the storage launch path remains provisional
+until that layer is fixed.
 
 Concrete QEMU implications:
 
