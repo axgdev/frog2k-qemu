@@ -581,6 +581,8 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"storage-reset"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-state"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-state"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-devctl"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-devctl"}}\n'; \
 	 printf '{"execute":"quit"}\n') | \
 		timeout 10s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) \
 		-display none -serial none -monitor none -qmp stdio \
@@ -616,7 +618,7 @@ smoke-board-contract: build
 	grep -q '"return": "0xf3f3f2f2"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x00000004"' build/logs/smoke-board-contract.console
 	grep -q '"return": "l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7"' build/logs/smoke-board-contract.console
-	grep -q '"return": "0x040004b2"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x140004b2"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x0000ff41"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x008f0000"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1d6b:0002"' build/logs/smoke-board-contract.console
@@ -628,6 +630,8 @@ smoke-board-contract: build
 	grep -q '"return": "0x06060606"' build/logs/smoke-board-contract.console
 	grep -q '"return": "mode=safe experimental=0 status=okay clock=198000000 bus-width=1 cap-highspeed=0 supports-highspeed=0 uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 broken-cd=1"' build/logs/smoke-board-contract.console
 	grep -q '"return": "powered-disconnected"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x0000001d"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x0000001d"' build/logs/smoke-board-contract.console
 	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-board-contract.log

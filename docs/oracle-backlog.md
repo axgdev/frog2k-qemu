@@ -85,7 +85,10 @@ The QEMU model already carries the observed reset values for the USB control
 and PHY block as queryable board-contract properties; the reset block is also
 boot-checked against the powered-disconnected shell at init time. If future
 probe work finds a mismatch, use those values as the first regression point
-before adding new topology behavior.
+before adding new topology behavior. The live controller devctl snapshot is
+now also queryable as `usb0-devctl` and `usb1-devctl`, which gives us a raw
+state check for the current controller shell even though downstream
+enumeration and PHY-specific behavior remain open.
 
 ## Priority 4: Skip-Ahead Workflows
 

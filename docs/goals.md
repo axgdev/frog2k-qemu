@@ -108,7 +108,9 @@ strong oracle:
   contract properties; the controller readback now reflects the powered
   host-shell status instead of just returning zeros, with the current probe
   evidence still pointing to one powered downstream port per controller and no
-  child device;
+  child device; the live controller devctl snapshot is now queryable as
+  `usb0-devctl` and `usb1-devctl`, but that remains a raw state snapshot rather
+  than downstream enumeration or PHY behavior;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible

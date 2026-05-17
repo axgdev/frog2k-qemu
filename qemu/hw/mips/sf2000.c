@@ -584,6 +584,7 @@ static char *sf2000_machine_gpio_init_get(Object *obj, Error **errp)
 }
 
 static uint32_t sf2000_gpio_l_out;
+static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size);
 
 static char *sf2000_machine_gpio_l_out_get(Object *obj, Error **errp)
 {
@@ -637,6 +638,18 @@ static char *sf2000_machine_usb1_state_get(Object *obj, Error **errp)
     }
     return g_strdup(sf2000_usb_link_powered[1] ? "powered-disconnected"
                                                : "disconnected");
+}
+
+static char *sf2000_machine_usb0_devctl_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4));
+}
+
+static char *sf2000_machine_usb1_devctl_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4));
 }
 
 static char *sf2000_machine_usb_root_hub_id_get(Object *obj, Error **errp)
@@ -5740,6 +5753,10 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_usb0_state_get, NULL);
     object_class_property_add_str(oc, "usb1-state",
                                   sf2000_machine_usb1_state_get, NULL);
+    object_class_property_add_str(oc, "usb0-devctl",
+                                  sf2000_machine_usb0_devctl_get, NULL);
+    object_class_property_add_str(oc, "usb1-devctl",
+                                  sf2000_machine_usb1_devctl_get, NULL);
 }
 
 static const TypeInfo sf2000_machine_type = {
