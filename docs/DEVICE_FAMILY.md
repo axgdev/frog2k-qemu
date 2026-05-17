@@ -75,6 +75,8 @@ until a board selector is needed. The next modelable board differences are:
   exposes the current `audio-power` state, a live `audio-backend-ready`
   hookup, first `audio-dac-value`, the board-level `audio-gate-route`, the
   observed gate-word pairs as `audio-gate-l` and `audio-gate-r`, and the
+  runtime gate-word snapshot as `audio-gate-l-live` and `audio-gate-r-live`,
+  and the
   observed audio volume/gain pair as `audio-volume` and `audio-gain`, and the
   observed mute gate as `audio-muted` (true at reset until the audio path is
   powered), plus the runtime gate state as `audio-gate-state`, and the

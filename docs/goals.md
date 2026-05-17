@@ -121,9 +121,9 @@ strong oracle:
   remaining work is the full amplifier chain and guest-driven PCM behavior
   rather than just making the contract visible. The captured gate route is
   board-specific: `sf2000_r07` on SF2000 and `gb300_l15` on GB300. The audio
-  mute/power transition is now boot-checked too, and the runtime gate state is
-  now queryable, but the analog chain and guest-driven PCM behavior remain
-  open.
+  mute/power transition is now boot-checked too, and the runtime gate state
+  plus live gate-word snapshot are now queryable, but the analog chain and
+  guest-driven PCM behavior remain open.
   The USB reset block is now boot-checked as well, but downstream enumeration
   and PHY-specific behavior remain open.
 - direct snapshot ergonomics if we decide to wrap the current QMP migration

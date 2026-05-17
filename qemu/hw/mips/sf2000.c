@@ -241,8 +241,10 @@ typedef struct SF2000BoardProfileSpec {
     const char *audio_gate_route;
     uint32_t audio_gate_l0;
     uint32_t audio_gate_l1;
+    uint32_t audio_gate_l1_active;
     uint32_t audio_gate_r0;
     uint32_t audio_gate_r1;
+    uint32_t audio_gate_r1_active;
     const char *audio_mux_open;
     uint32_t audio_hw_backend;
     uint32_t audio_hw_snd0;
@@ -283,8 +285,10 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gate_route = "sf2000_r07",
         .audio_gate_l0 = 0x390004fe,
         .audio_gate_l1 = 0x2b4085b3,
+        .audio_gate_l1_active = 0x2b4085b3,
         .audio_gate_r0 = 0x000000a0,
         .audio_gate_r1 = 0x00000080,
+        .audio_gate_r1_active = 0x00000080,
         .audio_mux_open = "l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0",
         .audio_hw_backend = 2,
         .audio_hw_snd0 = 0x14fc0082,
@@ -326,8 +330,10 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gate_route = "gb300_l15",
         .audio_gate_l0 = 0x350084fe,
         .audio_gate_l1 = 0x25c085b3,
+        .audio_gate_l1_active = 0x25c005b3,
         .audio_gate_r0 = 0x00000020,
         .audio_gate_r1 = 0x00000020,
+        .audio_gate_r1_active = 0x00000020,
         .audio_mux_open = "l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0",
         .audio_hw_backend = 2,
         .audio_hw_snd0 = 0x14fc0082,
@@ -400,6 +406,19 @@ static bool sf2000_audio_output_active(void)
     return sf2000_audio_powered && sf2000_audio_i2s_fade90 != 0;
 }
 
+static void sf2000_audio_gate_live_words(const SF2000BoardProfileSpec *profile,
+                                         uint32_t *gate_l1,
+                                         uint32_t *gate_r1)
+{
+    if (sf2000_audio_output_active()) {
+        *gate_l1 = profile->audio_gate_l1_active;
+        *gate_r1 = profile->audio_gate_r1_active;
+    } else {
+        *gate_l1 = profile->audio_gate_l1;
+        *gate_r1 = profile->audio_gate_r1;
+    }
+}
+
 static void sf2000_audio_set_backend_active(void)
 {
     if (sf2000_audio_voice) {
@@ -434,6 +453,28 @@ static char *sf2000_machine_audio_gate_r_get(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x/0x%08x",
                            sf2000_board_profile_spec()->audio_gate_r0,
                            sf2000_board_profile_spec()->audio_gate_r1);
+}
+
+static char *sf2000_machine_audio_gate_l_live_get(Object *obj, Error **errp)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t gate_l1;
+    uint32_t gate_r1;
+
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    return g_strdup_printf("0x%08x/0x%08x",
+                           profile->audio_gate_l0, gate_l1);
+}
+
+static char *sf2000_machine_audio_gate_r_live_get(Object *obj, Error **errp)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t gate_l1;
+    uint32_t gate_r1;
+
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    return g_strdup_printf("0x%08x/0x%08x",
+                           profile->audio_gate_r0, gate_r1);
 }
 
 static char *sf2000_machine_audio_mux_get(Object *obj, Error **errp)
@@ -1860,6 +1901,46 @@ static void sf2000_audio_state_selftest(void)
                   "sf2000: audio state selftest ok board=%s active=%s mute=%s\n",
                   profile->name, after_power ? "true" : "false",
                   after_fade ? "false" : "true");
+
+restore:
+    sf2000_audio_powered = saved_powered;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+}
+
+static void sf2000_audio_gate_live_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered = sf2000_audio_powered;
+    uint32_t saved_fade = sf2000_audio_i2s_fade90;
+    uint32_t gate_l1;
+    uint32_t gate_r1;
+
+    sf2000_audio_powered = false;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    if (gate_l1 != profile->audio_gate_l1 || gate_r1 != profile->audio_gate_r1) {
+        error_report("sf2000: audio gate live selftest failed board=%s reset gate mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    sf2000_audio_powered = true;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    if (gate_l1 != profile->audio_gate_l1_active ||
+        gate_r1 != profile->audio_gate_r1_active) {
+        error_report("sf2000: audio gate live selftest failed board=%s active gate mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio gate live selftest ok board=%s active_l1=0x%08x active_r1=0x%08x\n",
+                  profile->name, profile->audio_gate_l1_active,
+                  profile->audio_gate_r1_active);
 
 restore:
     sf2000_audio_powered = saved_powered;
@@ -5445,9 +5526,13 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
     sf2000_audio_state_selftest();
+    sf2000_audio_gate_live_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
-    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s gate_state=%s sr=%u ch=%u "
+    g_autofree char *gate_live_l = sf2000_machine_audio_gate_l_live_get(NULL, NULL);
+    g_autofree char *gate_live_r = sf2000_machine_audio_gate_r_live_get(NULL, NULL);
+
+    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u "
                 "storage-reset=%s",
@@ -5459,6 +5544,8 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->audio_route,
                 sf2000_board_profile_spec()->audio_open_route,
                 sf2000_audio_output_active() ? "open" : "closed",
+                gate_live_l,
+                gate_live_r,
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
                 sf2000_board_profile_spec()->audio_channels,
                 sf2000_board_profile_spec()->audio_period_frames,
@@ -5533,6 +5620,10 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_gate_l_get, NULL);
     object_class_property_add_str(oc, "audio-gate-r",
                                   sf2000_machine_audio_gate_r_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-l-live",
+                                  sf2000_machine_audio_gate_l_live_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-r-live",
+                                  sf2000_machine_audio_gate_r_live_get, NULL);
     object_class_property_add_str(oc, "audio-mux",
                                   sf2000_machine_audio_mux_get, NULL);
     object_class_property_add_str(oc, "audio-hw-backend",
