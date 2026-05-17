@@ -27,7 +27,9 @@ smoke now proves the HC15 host bind and early command path. The log shows
 writes at `0x1884c004` and `0x1884c002`. The remaining work is to keep those
 controller-level traces stable while deciding whether the initrd/device-node
 path should remain a separate smoke. A later supervisor-cloned launch attempt
-still did not surface `sf2000_storage_fastprobe: probe begin`, so the
+still did not surface `sf2000_storage_fastprobe: probe begin`, and the newer
+direct `rdinit=/usr/sbin/sf2000-storage-probe` writeback smoke also stalls
+before `stor-start` in the repeated `epc=0x04c00050` loop, so the
 controller-trace oracle remains the only reliable proof for the Linux probe
 body for now. The QEMU no-image fallback now self-tests its synthetic
 writeback path and logs `sf2000: synthetic FAT probe writeback selftest ok`,

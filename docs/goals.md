@@ -81,7 +81,10 @@ strong oracle:
   from the initrd/device-node path; the emulator also now self-tests the
   synthetic no-image writeback path and has an opt-in raw-image writeback
   smoke through the SDIO DMA path so that both fallback media and attached raw
-  media stay writable;
+  media stay writable, but the guest-side direct `sf2000-storage-probe`
+  writeback smoke is still blocked before `stor-start` in the repeated
+  `epc=0x04c00050` loop, so the mirrored FAT / MMC ioctl path remains
+  unproven;
 - audio and amplifier routing;
 - USB host and gadget behavior; the current Linux fastprobe now proves SF2000
   MUSB controller registration and access tracing, but still does not validate
