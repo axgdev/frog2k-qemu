@@ -28,7 +28,10 @@ writes at `0x1884c004` and `0x1884c002`. The remaining work is to keep those
 controller-level traces stable while deciding whether the initrd/device-node
 path should remain a separate smoke. A later supervisor-cloned launch attempt
 still did not surface `sf2000_storage_fastprobe: probe begin`, so the
-controller-trace oracle remains the only reliable proof for now.
+controller-trace oracle remains the only reliable proof for the Linux probe
+body for now. The QEMU no-image fallback now self-tests its synthetic
+writeback path and logs `sf2000: synthetic FAT probe writeback selftest ok`,
+so the emulator-side writable fallback is also independently proven.
 
 Concrete QEMU implications:
 

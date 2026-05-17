@@ -2485,6 +2485,25 @@ static void sf2000_sdio_synth_write_sector(uint32_t lba,
                          copy);
 }
 
+static void sf2000_sdio_synth_writeback_selftest(void)
+{
+    uint8_t write_sector[512];
+    uint8_t read_sector[512];
+    uint32_t lba = 0xfffffff0u;
+
+    memset(write_sector, 0x5a, sizeof(write_sector));
+    memset(read_sector, 0, sizeof(read_sector));
+    sf2000_sdio_synth_write_sector(lba, write_sector);
+    if (!sf2000_sdio_synth_read_sector(lba, read_sector) ||
+        memcmp(write_sector, read_sector, sizeof(write_sector)) != 0) {
+        error_report("sf2000: synthetic FAT probe writeback selftest failed lba=%u",
+                     lba);
+        return;
+    }
+    info_report("sf2000: synthetic FAT probe writeback selftest ok lba=%u",
+                lba);
+}
+
 static bool sf2000_sdio_read_sector(uint32_t lba, uint8_t sector[512])
 {
     int ret;
@@ -4425,6 +4444,7 @@ static void sf2000_init(MachineState *machine)
         info_report("sf2000: using SD image '%s'", blk_name(sf2000_sdio_blk));
     } else {
         info_report("sf2000: no SD image supplied; using synthetic FAT probe media");
+        sf2000_sdio_synth_writeback_selftest();
     }
 
     sf2000_load_bootrom(machine, sysmem);

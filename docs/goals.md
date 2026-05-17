@@ -75,7 +75,8 @@ strong oracle:
   controller probe and command-register traffic, but the userspace probe
   launch remains brittle even when we try the supervisor-cloned path, so the
   next step is to keep the controller-trace oracle stable while separating it
-  from the initrd/device-node path;
+  from the initrd/device-node path; the emulator also now self-tests the
+  synthetic no-image writeback path so that fallback media stays writable;
 - audio and amplifier routing;
 - USB host and gadget behavior; the current Linux fastprobe now proves SF2000
   MUSB controller registration and access tracing, but still does not validate

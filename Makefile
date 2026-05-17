@@ -466,6 +466,7 @@ smoke-stock-fatfs: build
 		-d guest_errors,unimp -D build/logs/smoke-stock-fatfs.log \
 		> build/logs/smoke-stock-fatfs.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-stock-fatfs.console
+	grep -q 'sf2000: synthetic FAT probe writeback selftest ok' build/logs/smoke-stock-fatfs.console
 	grep -q 'uart: \[FS\]successed!' build/logs/smoke-stock-fatfs.log
 
 smoke-stock-display: build
