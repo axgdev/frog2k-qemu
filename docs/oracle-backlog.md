@@ -132,7 +132,7 @@ The captured hardware logs show more than a DAC write:
 - the boot-checked mute/power transition self-test now verifies the reset
   muted state before firmware runs, but it is still only a contract check and
   not a full analog implementation;
-- a fixed 44.1 kHz, mono-left, 1024-frame, 8-period playback contract;
+- a fixed 32 kHz, mono-left, 1024-frame, 8-period playback contract;
 - PWM/backlight activity that travels alongside the audio probe.
 
 Use those logs as the next reference if the amplifier chain is modeled more
