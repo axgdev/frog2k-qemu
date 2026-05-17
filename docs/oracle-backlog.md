@@ -123,13 +123,16 @@ The captured hardware logs show more than a DAC write:
 - the captured mux-open snapshot (`l22=0 l23=0 l24=0 l25=0 l26=0 l27=0
   l28=0 l29=0 r07=0`) that now appears as a QMP-visible `audio-mux`
   property;
-- the captured audio hardware open snapshot (`backend=2`, `snd0=0x14fc0082`,
+  - the captured audio hardware open snapshot (`backend=2`, `snd0=0x14fc0082`,
   `dac=0x4200039e`) that now appears as QMP-visible `audio-hw-backend`,
   `audio-hw-snd0`, and `audio-hw-dac` properties;
-- the captured playback open route (`sf2000_left_only`) that now appears as
+  - the captured playback open route (`sf2000_left_only`) that now appears as
   a QMP-visible `audio-open-route` property and matches the mono-left
   playback contract seen in the hardware logs;
-- the boot-checked mute/power transition self-test now verifies the reset
+  - the runtime gate state is now queryable as `audio-gate-state`, but that
+    still only reflects the muted/open snapshot rather than a full analog
+    implementation;
+  - the boot-checked mute/power transition self-test now verifies the reset
   muted state before firmware runs, but it is still only a contract check and
   not a full analog implementation;
 - a fixed 32 kHz, mono-left, 1024-frame, 8-period playback contract;

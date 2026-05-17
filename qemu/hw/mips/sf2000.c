@@ -471,6 +471,11 @@ static char *sf2000_machine_audio_muted_get(Object *obj, Error **errp)
     return g_strdup(sf2000_audio_output_active() ? "false" : "true");
 }
 
+static char *sf2000_machine_audio_gate_state_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_audio_output_active() ? "open" : "closed");
+}
+
 static char *sf2000_machine_audio_power_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_audio_powered ? "enabled" : "disabled");
@@ -5442,7 +5447,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_audio_state_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
-    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s sr=%u ch=%u "
+    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s gate_state=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u "
                 "storage-reset=%s",
@@ -5453,6 +5458,7 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->gpio_init,
                 sf2000_board_profile_spec()->audio_route,
                 sf2000_board_profile_spec()->audio_open_route,
+                sf2000_audio_output_active() ? "open" : "closed",
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
                 sf2000_board_profile_spec()->audio_channels,
                 sf2000_board_profile_spec()->audio_period_frames,
@@ -5541,6 +5547,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_gain_get, NULL);
     object_class_property_add_str(oc, "audio-muted",
                                   sf2000_machine_audio_muted_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-state",
+                                  sf2000_machine_audio_gate_state_get, NULL);
     object_class_property_add_str(oc, "audio-power",
                                   sf2000_machine_audio_power_get, NULL);
     object_class_property_add_str(oc, "audio-backend-ready",
