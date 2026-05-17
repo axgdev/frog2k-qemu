@@ -72,8 +72,9 @@ strong oracle:
 
 - higher-fidelity display timing and any remaining panel-status corner cases
   beyond the self-tested panel-ID/readback table and the new explicit
-  `board-profile` selector and the new machine-visible `panel-id` and
-  `panel-te-hz` timing properties; the
+  `board-profile` selector and the new machine-visible `panel-id`,
+  `panel-probe-sig1`/`panel-probe-sig2`, and `panel-te-hz` timing properties;
+  the
   current Linux panel smoke is still blocked before any `sf2000-screen`
   C-side marker by a repeated `epc=0x047c0050` TLB fault loop, so the next
   panel pass likely needs a tiny fastprobe rather than the full screen init

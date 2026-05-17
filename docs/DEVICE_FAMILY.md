@@ -48,6 +48,10 @@ until a board selector is needed. The next modelable board differences are:
 - Panel read IDs: implement the GPIO-8080 read direction and return board
   profile responses for `0x04`, `0x09`, `0x0a`, `0x0c`, `0xd3`,
   `0xda`, `0xdb`, and `0xdc`.
+  The model now also carries the board-specific `panel_probe_done` payload
+  observed in the boot trace as queryable `panel-probe-sig1` and
+  `panel-probe-sig2` properties so the remaining display work can track the
+  post-probe status bytes as data.
 - Panel geometry and transform: preserve the common 320x240 framebuffer path,
   but make MADCTL and set-address-window behavior visible enough to catch
   rotated or mirrored init mistakes. QEMU now has an explicit `board-profile`
