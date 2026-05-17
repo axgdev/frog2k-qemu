@@ -68,6 +68,8 @@ until a board selector is needed. The next modelable board differences are:
   observed playback contract as read-only `audio-sample-rate`,
   `audio-channels`, `audio-period-frames`, and `audio-periods` properties, but
   it still needs real audio behavior before this becomes a functional model.
+  The baseline boot log now prints that audio contract and the USB topology in
+  one line so the regression smoke can verify the board shape directly.
 - Firmware images: SF2000 stock uses
   `/root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd`; GB300 stock
   firmware is available at
