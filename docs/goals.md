@@ -46,6 +46,7 @@ The repository already has useful validation checkpoints:
 - `make smoke-linux-reboot`
 - `make smoke-linux-buildroot-reset-snapshot`
 - `make smoke-linux-buildroot-reset-restore`
+- `make -C ../sf2000_linux smoke-qemu-board-contract`
 - `make -C ../sf2000_linux smoke-qemu-stock-fatfs-writeback`
 - `make -C ../sf2000_linux smoke-qemu-display`
 
