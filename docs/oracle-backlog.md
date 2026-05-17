@@ -105,7 +105,7 @@ The captured hardware logs show more than a DAC write:
 
 - a stable gate label (`sf2000_r07`);
 - board-side mux state changes around mute/unmute and volume changes;
-- a fixed 44.1 kHz, 1-channel, 1024-frame, 8-period playback contract;
+- a fixed 44.1 kHz, mono-left, 1024-frame, 8-period playback contract;
 - PWM/backlight activity that travels alongside the audio probe.
 
 Use those logs as the next reference if the amplifier chain is modeled more

@@ -256,7 +256,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_route = "sf2000-default-amp",
         .audio_gate_route = "sf2000_r07",
         .audio_sample_rate_hz = 44100,
-        .audio_channels = 2,
+        .audio_channels = 1,
         .audio_period_frames = 1024,
         .audio_periods = 8,
         .usb0_route = "micro-usb",
@@ -279,7 +279,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_route = "gb300-family-amp",
         .audio_gate_route = "sf2000_r07",
         .audio_sample_rate_hz = 44100,
-        .audio_channels = 2,
+        .audio_channels = 1,
         .audio_period_frames = 1024,
         .audio_periods = 8,
         .usb0_route = "micro-usb",
@@ -486,6 +486,8 @@ static char *sf2000_machine_usb_phy3_get(Object *obj, Error **errp)
 static void sf2000_audio_callback(void *opaque, int free)
 {
     int16_t sample_buf[256 * 2];
+    unsigned channels = sf2000_board_profile_spec()->audio_channels ?
+                        sf2000_board_profile_spec()->audio_channels : 1;
 
     (void)opaque;
 
@@ -494,8 +496,8 @@ static void sf2000_audio_callback(void *opaque, int free)
     }
 
     while (free > 0) {
-        size_t frames = MIN((size_t)free / (sizeof(int16_t) * 2),
-                            ARRAY_SIZE(sample_buf) / 2);
+        size_t frames = MIN((size_t)free / (sizeof(int16_t) * channels),
+                            ARRAY_SIZE(sample_buf) / channels);
         size_t bytes;
 
         if (!frames) {
@@ -506,13 +508,17 @@ static void sf2000_audio_callback(void *opaque, int free)
             int16_t sample = (sf2000_audio_wave_phase & 0x80000000u) ?
                              -0x0800 : 0x0800;
 
-            sample_buf[i * 2] = sample;
-            sample_buf[i * 2 + 1] = sample;
+            sample_buf[i * channels] = sample;
+            if (channels > 1) {
+                for (unsigned ch = 1; ch < channels; ch++) {
+                    sample_buf[i * channels + ch] = sample;
+                }
+            }
             sf2000_audio_wave_phase += sf2000_audio_wave_step;
         }
 
         bytes = AUD_write(sf2000_audio_voice, sample_buf,
-                          frames * sizeof(int16_t) * 2);
+                          frames * sizeof(int16_t) * channels);
         if (!bytes) {
             break;
         }

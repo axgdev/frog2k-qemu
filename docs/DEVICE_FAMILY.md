@@ -70,7 +70,7 @@ until a board selector is needed. The next modelable board differences are:
   startup DAC write as `sf2000: audio setup route=...`. The emulator also
   exposes the current `audio-power` state, a live `audio-backend-ready`
   hookup, first `audio-dac-value`, the board-level `audio-gate-route`, and the
-  observed playback contract as read-only `audio-sample-rate`,
+  observed mono-left playback contract as read-only `audio-sample-rate`,
   `audio-channels`, `audio-period-frames`, `audio-periods`,
   `audio-i2s-ctrl3c`, and `audio-i2s-fade90` properties, but it still needs the
   full amplifier chain and guest-driven PCM flow before this becomes a
