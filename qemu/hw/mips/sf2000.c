@@ -796,6 +796,9 @@ static void sf2000_trace_progress_log(void)
         return;
     }
 
+    if (sf2000_last_progress_valid && seq < sf2000_last_progress_seq) {
+        sf2000_last_progress_valid = false;
+    }
     start_seq = sf2000_last_progress_valid ? sf2000_last_progress_seq + 1u : 1u;
     if (start_seq > seq) {
         sf2000_last_progress_seq = seq;
