@@ -75,7 +75,10 @@ strong oracle:
   launch remains brittle, so the next step is to keep the controller-trace
   oracle stable while separating it from the initrd/device-node path;
 - audio and amplifier routing;
-- USB host and gadget behavior;
+- USB host and gadget behavior; the current Linux boot only registers the
+  generic USB core and EHCI/OHCI scaffolding, and still does not bind an
+  SF2000 MUSB controller, so this remains a board-glue/PHY problem rather than
+  a completed host oracle;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, and the observed audio
   setup write in the stock display smoke.
