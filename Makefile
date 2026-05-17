@@ -52,7 +52,7 @@ GB300_MACHINE_ARGS ?= -M sf2000,board-profile=gb300
 
 -include config.mk
 
-.PHONY: all help deps build-info check-firmware check-bugfix-firmware check-asd check-gb300-asd check-linux-elf check-linux-rom-sd ccache-stats ccache-zero fetch patch configure build vanilla-sd run-vnc run-vnc-vanilla run-headless boot-stock-asd boot-gb300-asd boot-linux-elf debug capture-stock-ui capture-vanilla-ui capture-vanilla-video smoke smoke-input smoke-linux-elf smoke-linux-reboot smoke-stock-bootloader smoke-stock-full smoke-stock-full-bugfix smoke-stock-full-vanilla smoke-stock-full-fat16 smoke-stock-asd smoke-stock-fatfs smoke-stock-display smoke-gb300-asd smoke-gb300-fatfs smoke-gb300-display clean distclean
+.PHONY: all help deps build-info check-firmware check-bugfix-firmware check-asd check-gb300-asd check-linux-elf check-linux-rom-sd ccache-stats ccache-zero fetch patch configure build vanilla-sd run-vnc run-vnc-vanilla run-headless boot-stock-asd boot-gb300-asd boot-linux-elf debug capture-stock-ui capture-vanilla-ui capture-vanilla-video smoke smoke-input smoke-linux-elf smoke-linux-reboot smoke-stock-bootloader smoke-stock-full smoke-stock-full-bugfix smoke-stock-full-vanilla smoke-stock-full-fat16 smoke-stock-asd smoke-stock-fatfs smoke-stock-fatfs-writeback smoke-stock-display smoke-gb300-asd smoke-gb300-fatfs smoke-gb300-display clean distclean
 
 all: build
 
@@ -73,6 +73,7 @@ help:
 		'  make smoke-stock-full-fat16 run the same bootloader path on FAT16' \
 		'  make smoke-stock-asd verify direct stock ASD boot reaches early MMIO' \
 		'  make smoke-stock-fatfs verify stock ASD reaches SD/FatFs mount' \
+		'  make smoke-stock-fatfs-writeback verify raw SD writeback against a real image' \
 		'  make smoke-stock-display verify stock ASD drives GMA scanout' \
 		'  make smoke-gb300-fatfs verify direct GB300 ASD reaches SD/FatFs mount' \
 		'  make smoke-gb300-display verify direct GB300 ASD drives GMA scanout' \
@@ -468,6 +469,20 @@ smoke-stock-fatfs: build
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-stock-fatfs.console
 	grep -q 'sf2000: synthetic FAT probe writeback selftest ok' build/logs/smoke-stock-fatfs.console
 	grep -q 'uart: \[FS\]successed!' build/logs/smoke-stock-fatfs.log
+
+smoke-stock-fatfs-writeback: build
+	mkdir -p build/logs
+	tmp_sd=$$(mktemp build/sf2000-storage-writeback.XXXXXX.img); \
+	trap 'rm -f $$tmp_sd' EXIT; \
+	truncate -s 1M $$tmp_sd; \
+	timeout 10s $(QEMU_BIN) -M sf2000,storage-selftest-raw=on -bios $(FIRMWARE) \
+		-drive if=none,id=sd0,file=$$tmp_sd,format=raw \
+		-display none -serial none -monitor none \
+		-d guest_errors,unimp -D build/logs/smoke-stock-fatfs-writeback.log \
+		> build/logs/smoke-stock-fatfs-writeback.console 2>&1 || test $$? -eq 124; \
+	grep -q 'sf2000: using SD image' build/logs/smoke-stock-fatfs-writeback.console; \
+	grep -q 'sf2000: raw SD probe writeback selftest ok lba=16' build/logs/smoke-stock-fatfs-writeback.console; \
+	od -An -tx1 -N 16 -j $$((16 * 512)) $$tmp_sd | grep -q '5a 5a 5a 5a 5a 5a 5a 5a'
 
 smoke-stock-display: build
 	mkdir -p build/logs

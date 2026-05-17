@@ -36,6 +36,7 @@ The repository already has useful validation checkpoints:
 - `make smoke-stock-full-fat16`
 - `make smoke-stock-asd`
 - `make smoke-stock-fatfs`
+- `make smoke-stock-fatfs-writeback`
 - `make smoke-stock-display`
 - `make smoke-gb300-asd`
 - `make smoke-gb300-fatfs`
@@ -78,7 +79,8 @@ strong oracle:
   launch remains brittle even when we try the supervisor-cloned path, so the
   next step is to keep the controller-trace oracle stable while separating it
   from the initrd/device-node path; the emulator also now self-tests the
-  synthetic no-image writeback path so that fallback media stays writable;
+  synthetic no-image writeback path and has an opt-in raw-image writeback
+  smoke so that both fallback media and attached raw media stay writable;
 - audio and amplifier routing;
 - USB host and gadget behavior; the current Linux fastprobe now proves SF2000
   MUSB controller registration and access tracing, but still does not validate

@@ -271,6 +271,7 @@ static uint32_t sf2000_audio_dac_value;
 static bool sf2000_audio_dac_written;
 static uint32_t sf2000_audio_i2s_ctrl3c;
 static uint32_t sf2000_audio_i2s_fade90;
+static bool sf2000_storage_selftest_raw;
 static bool sf2000_usb_link_powered[2];
 static bool sf2000_usb_link_active[2];
 
@@ -342,6 +343,17 @@ static char *sf2000_machine_audio_i2s_ctrl3c_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_i2s_fade90_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x", sf2000_audio_i2s_fade90);
+}
+
+static bool sf2000_machine_storage_selftest_raw_get(Object *obj, Error **errp)
+{
+    return sf2000_storage_selftest_raw;
+}
+
+static void sf2000_machine_storage_selftest_raw_set(Object *obj, bool value,
+                                                    Error **errp)
+{
+    sf2000_storage_selftest_raw = value;
 }
 
 static char *sf2000_machine_usb0_route_get(Object *obj, Error **errp)
@@ -2595,6 +2607,42 @@ static void sf2000_sdio_synth_writeback_selftest(void)
                 lba);
 }
 
+static void sf2000_sdio_raw_writeback_selftest(void)
+{
+    uint8_t write_sector[512];
+    uint8_t read_sector[512];
+    uint32_t lba = 0x10;
+    int ret;
+
+    memset(write_sector, 0x5a, sizeof(write_sector));
+    memset(read_sector, 0, sizeof(read_sector));
+
+    ret = blk_pwrite(sf2000_sdio_blk, (int64_t)lba * 512,
+                     sizeof(write_sector), write_sector, 0);
+    if (ret < 0) {
+        error_report("sf2000: raw SD probe writeback selftest failed write lba=%u ret=%d",
+                     lba, ret);
+        return;
+    }
+
+    ret = blk_flush(sf2000_sdio_blk);
+    if (ret < 0) {
+        error_report("sf2000: raw SD probe writeback selftest failed flush lba=%u ret=%d",
+                     lba, ret);
+        return;
+    }
+
+    ret = blk_pread(sf2000_sdio_blk, (int64_t)lba * 512,
+                    sizeof(read_sector), read_sector, 0);
+    if (ret < 0 || memcmp(write_sector, read_sector, sizeof(write_sector)) != 0) {
+        error_report("sf2000: raw SD probe writeback selftest failed verify lba=%u ret=%d",
+                     lba, ret);
+        return;
+    }
+
+    info_report("sf2000: raw SD probe writeback selftest ok lba=%u", lba);
+}
+
 static bool sf2000_sdio_read_sector(uint32_t lba, uint8_t sector[512])
 {
     int ret;
@@ -4552,6 +4600,9 @@ static void sf2000_init(MachineState *machine)
             exit(1);
         }
         info_report("sf2000: using SD image '%s'", blk_name(sf2000_sdio_blk));
+        if (sf2000_storage_selftest_raw) {
+            sf2000_sdio_raw_writeback_selftest();
+        }
     } else {
         info_report("sf2000: no SD image supplied; using synthetic FAT probe media");
         sf2000_sdio_synth_writeback_selftest();
@@ -4595,6 +4646,9 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_i2s_ctrl3c_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-fade90",
                                   sf2000_machine_audio_i2s_fade90_get, NULL);
+    object_class_property_add_bool(oc, "storage-selftest-raw",
+                                   sf2000_machine_storage_selftest_raw_get,
+                                   sf2000_machine_storage_selftest_raw_set);
     object_class_property_add_str(oc, "usb0-route",
                                   sf2000_machine_usb0_route_get, NULL);
     object_class_property_add_str(oc, "usb1-route",
