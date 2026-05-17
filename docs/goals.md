@@ -131,8 +131,10 @@ strong oracle:
   mute/power transition is now boot-checked too, and the runtime gate state
   plus live gate-word snapshot are now queryable and boot-checked, but the
   analog chain and guest-driven PCM behavior remain open.
-  The USB reset block is now boot-checked as well, but downstream enumeration
-  and PHY-specific behavior remain open.
+  The PWM2/backlight on/off state is now boot-checked through the scanout
+  blanking path, so the display model proves the off-state effect instead of
+  only the register snapshot. The USB reset block is now boot-checked as
+  well, but downstream enumeration and PHY-specific behavior remain open.
 - direct snapshot ergonomics if we decide to wrap the current QMP migration
   flow in a shorter, less QMP-specific resume path.
 

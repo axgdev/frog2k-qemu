@@ -147,7 +147,9 @@ The captured hardware logs show more than a DAC write:
   - the captured PWM2/backlight reset snapshot (`clk=0xc0010000`,
     `lohi=0x05470547`, `ctrl=0x00000090`) that now appears as a QMP-visible
     `pwm2-backlight` property, and the live on/off state that now appears as
-    `pwm2-backlight-active`;
+    `pwm2-backlight-active`; the boot selftest now also checks that a
+    backlight-off GMA present blanks the rendered surface, so the blanking
+    behavior is proven rather than only the state snapshot;
   - the captured playback open route (`sf2000_left_only`) that now appears as
   a QMP-visible `audio-open-route` property and matches the mono-left
   playback contract seen in the hardware logs;

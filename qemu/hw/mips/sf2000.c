@@ -1039,6 +1039,8 @@ static uint32_t sf2000_rgb565_lut[UINT16_MAX + 1u];
 static bool sf2000_rgb565_lut_ready;
 static uint32_t sf2000_rgb565_to_surface(uint16_t pix);
 static void sf2000_gma_present(uint32_t dmba_addr);
+static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
+                                         bool dump_frame);
 static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
 
 static uint64_t sf2000_cpu_hz(void)
@@ -2045,6 +2047,92 @@ static void sf2000_pwm2_backlight_selftest(void)
     qemu_log_mask(LOG_UNIMP,
                   "sf2000: pwm2 backlight selftest ok board=%s clk=0x%08x lohi=0x%08x ctrl=0x%08x\n",
                   profile->name, pwm_clk_ctrl, pwm2_lohi, pwm2_ctrl);
+}
+
+static void sf2000_pwm2_backlight_blank_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    SF2000LCDState *s = sf2000_lcd;
+    DisplaySurface *surface;
+    uint8_t descriptor[40];
+    uint8_t pixel[2] = { 0xff, 0xff };
+    uint32_t saved_clk_ctrl;
+    uint32_t saved_pwm2_ctrl;
+    uint32_t saved_pixel = 0;
+    uint32_t *dst;
+    const hwaddr desc_addr = 0x00002000ULL;
+    const hwaddr pixel_addr = 0x00003000ULL;
+    uint32_t old;
+
+    if (!s || !s->con) {
+        error_report("sf2000: pwm2 backlight blank selftest failed board=%s no console",
+                     profile->name);
+        return;
+    }
+
+    surface = qemu_console_surface(s->con);
+    if (surface_bits_per_pixel(surface) != 32 ||
+        surface_width(surface) != SF2000_LCD_WIDTH ||
+        surface_height(surface) != SF2000_LCD_HEIGHT) {
+        qemu_console_resize(s->con, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
+        surface = qemu_console_surface(s->con);
+    }
+    if (surface_bits_per_pixel(surface) != 32) {
+        error_report("sf2000: pwm2 backlight blank selftest failed board=%s surface-bpp=%u",
+                     profile->name, surface_bits_per_pixel(surface));
+        return;
+    }
+
+    dst = (uint32_t *)surface_data(surface);
+    saved_pixel = dst[0];
+
+    memset(descriptor, 0, sizeof(descriptor));
+    stl_le_p(descriptor + 0, 0x00000060u); /* RGB565, CLUT off. */
+    stl_le_p(descriptor + 4, 0x00000000u);
+    stl_le_p(descriptor + 8, 0x00000000u);
+    stl_le_p(descriptor + 12, 0x00000000u);
+    stl_le_p(descriptor + 16, 0x00010001u);
+    stl_le_p(descriptor + 20, 0x00020000u);
+    stl_le_p(descriptor + 24, 0x00000000u);
+    stl_le_p(descriptor + 28, (uint32_t)pixel_addr);
+    stl_le_p(descriptor + 32, 0x00000000u);
+    stl_le_p(descriptor + 36, 0x00000000u);
+
+    cpu_physical_memory_write(desc_addr, descriptor, sizeof(descriptor));
+    cpu_physical_memory_write(pixel_addr, pixel, sizeof(pixel));
+
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &saved_clk_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, &saved_pwm2_ctrl);
+    sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL,
+                      saved_clk_ctrl & ~(SF2000_PWM_CLKEN | SF2000_PWM_ENABLE));
+    sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u,
+                      saved_pwm2_ctrl & ~SF2000_PWM_CH_ENABLE);
+
+    if (sf2000_pwm2_backlight_active()) {
+        error_report("sf2000: pwm2 backlight blank selftest failed board=%s backlight still active",
+                     profile->name);
+        goto restore;
+    }
+
+    (void)sf2000_gma_present_block(s, desc_addr, false);
+    old = dst[0];
+    if (old != 0xff000000u) {
+        error_report("sf2000: pwm2 backlight blank selftest failed board=%s pixel=0x%08x",
+                     profile->name, old);
+        goto restore;
+    }
+
+    info_report("sf2000: pwm2 backlight blank selftest ok board=%s sample=0x%08x",
+                profile->name, old);
+
+restore:
+    dst[0] = saved_pixel;
+    dpy_gfx_update(s->con, 0, 0, 1, 1);
+    sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, saved_clk_ctrl);
+    sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, saved_pwm2_ctrl);
 }
 
 static void sf2000_audio_state_selftest(void)
@@ -5759,6 +5847,9 @@ static void sf2000_init(MachineState *machine)
     sf2000_audio_gate_live_variant_selftest();
     sf2000_audio_hw_close_selftest();
     sf2000_pwm2_backlight_selftest();
+    g_autofree char *pwm2_backlight_active =
+        sf2000_machine_pwm2_backlight_active_get(NULL, NULL);
+    sf2000_pwm2_backlight_blank_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
     sf2000_usb_phy_snapshot_selftest();
@@ -5783,9 +5874,9 @@ static void sf2000_init(MachineState *machine)
                 sf2000_audio_output_active() ? "open" : "closed",
                 gate_live_l,
                 gate_live_r,
-                sf2000_pwm2_backlight_active() ? "true" : "false",
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
                 sf2000_board_profile_spec()->audio_channels,
+                pwm2_backlight_active,
                 sf2000_board_profile_spec()->audio_period_frames,
                 sf2000_board_profile_spec()->audio_periods,
                 sf2000_board_profile_spec()->audio_volume,

@@ -99,6 +99,8 @@ until a board selector is needed. The next modelable board differences are:
   the boot-time backlight defaults stay visible alongside the rest of the
   audio contract, and the live `pwm2-backlight-active` property reflects the
   current on/off state that now blanks scanout when the backlight is off.
+  That blanking path is boot-checked so the display model proves the off-state
+  effect, not just the state snapshot.
   The baseline boot log now prints that audio contract, the gate route, and
   the USB topology in one line so the regression smoke can verify the board
   shape directly.
