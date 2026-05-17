@@ -455,6 +455,13 @@ static char *sf2000_machine_panel_te_hz_get(Object *obj, Error **errp)
     return g_strdup_printf("%u", sf2000_board_profile_spec()->panel_te_hz);
 }
 
+static uint32_t sf2000_gpio_l_out;
+
+static char *sf2000_machine_gpio_l_out_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_gpio_l_out);
+}
+
 static char *sf2000_machine_audio_i2s_ctrl3c_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x", sf2000_audio_i2s_ctrl3c);
@@ -884,7 +891,6 @@ static uint8_t sf2000_irc_ier;
 static uint8_t sf2000_irc_isr;
 static uint32_t sf2000_key_mask;
 static unsigned sf2000_key_shift_index;
-static uint32_t sf2000_gpio_l_out;
 static uint8_t sf2000_rf_regs[256];
 static bool sf2000_rf_cs;
 static bool sf2000_rf_clk;
@@ -5305,6 +5311,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_panel_id_get, NULL);
     object_class_property_add_str(oc, "panel-te-hz",
                                   sf2000_machine_panel_te_hz_get, NULL);
+    object_class_property_add_str(oc, "gpio-l-out",
+                                  sf2000_machine_gpio_l_out_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-ctrl3c",
                                   sf2000_machine_audio_i2s_ctrl3c_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-fade90",

@@ -105,6 +105,9 @@ until a board selector is needed. The next modelable board differences are:
   session-active so the queryable state mirrors the probe logs more closely.
   The current probe evidence points to one powered downstream port per
   controller, with no child device attached.
+- The generic GPIO-L output latch is also exposed as `gpio-l-out` so the
+  keypad and board-mux write path can be queried directly instead of only
+  inferred from guest traces.
 
 ## Current GB300 Boot Status
 

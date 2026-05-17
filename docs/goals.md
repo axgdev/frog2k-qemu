@@ -54,6 +54,7 @@ These targets establish the current baseline for:
 - GB300 direct boot on the shared machine;
 - GMA scanout and panel setup;
 - board-profile, panel identity/timing, and topology metadata through QMP property queries;
+- the generic GPIO-L output latch through QMP so keypad and board-mux writes can be observed directly;
 - keypad input delivery;
 - direct Linux ELF boot;
 - Linux watchdog reboot back into the bootloader.
