@@ -88,7 +88,11 @@ probe work finds a mismatch, use those values as the first regression point
 before adding new topology behavior. The live controller devctl snapshot is
 now also queryable as `usb0-devctl` and `usb1-devctl`, which gives us a raw
 state check for the current controller shell even though downstream
-enumeration and PHY-specific behavior remain open.
+enumeration and PHY-specific behavior remain open. The live UTMI/PHY snapshot
+is now queryable as `usb0-utmi380`, `usb1-utmi380`, `usb0-phy384`, and
+`usb1-phy384`, and the boot log self-tests that snapshot against the captured
+boot values, but that still only proves controller-state visibility rather
+than actual host/device negotiation.
 
 ## Priority 4: Skip-Ahead Workflows
 

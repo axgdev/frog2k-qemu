@@ -498,6 +498,7 @@ smoke-stock-display: build
 	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000060/0x0000001d usb1=0x00000060/0x0000001d' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: usb phy snapshot selftest ok board=sf2000 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: audio setup route=sf2000-default-amp' build/logs/smoke-stock-display.console
 	grep -q 'gma-present .*mode=12' build/logs/smoke-stock-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-stock-display.log
@@ -533,6 +534,7 @@ smoke-gb300-display: build check-gb300-asd
 	grep -q 'sf2000: panel readback selftest ok board=gb300 panel=0x00009306' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: usb reset block selftest ok board=gb300 usb0=0x00000060/0x0000001d usb1=0x00000060/0x0000001d' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: usb link state selftest ok board=gb300' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: usb phy snapshot selftest ok board=gb300 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: lcd profile=gb300 panel=0x00009306 geometry=240x320' build/logs/smoke-gb300-display.console
 	grep -q 'uart: L115(board.c):LCD_TYPE_ST7789V_MCU8080' build/logs/smoke-gb300-display.log
 	grep -q 'gma-present .*mode=12' build/logs/smoke-gb300-display.log
@@ -583,6 +585,10 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-state"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-devctl"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-devctl"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-utmi380"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-utmi380"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-phy384"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-phy384"}}\n'; \
 	 printf '{"execute":"quit"}\n') | \
 		timeout 10s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) \
 		-display none -serial none -monitor none -qmp stdio \
@@ -632,11 +638,16 @@ smoke-board-contract: build
 	grep -q '"return": "powered-disconnected"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x0000001d"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x0000001d"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00570740"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00570740"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000010"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000010"' build/logs/smoke-board-contract.console
 	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000060/0x0000001d usb1=0x00000060/0x0000001d' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-board-contract.log
+	grep -q 'sf2000: usb phy snapshot selftest ok board=sf2000 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-board-contract.log
 
 clean:
 	rm -rf $(QEMU_SRC)/build

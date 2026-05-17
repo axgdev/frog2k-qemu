@@ -110,7 +110,10 @@ strong oracle:
   evidence still pointing to one powered downstream port per controller and no
   child device; the live controller devctl snapshot is now queryable as
   `usb0-devctl` and `usb1-devctl`, but that remains a raw state snapshot rather
-  than downstream enumeration or PHY behavior;
+  than downstream enumeration or PHY behavior; the live UTMI/PHY snapshot is
+  now also queryable as `usb0-utmi380`, `usb1-utmi380`, `usb0-phy384`, and
+  `usb1-phy384`, but that still only proves controller-state visibility rather
+  than real enumeration or PHY negotiation;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible

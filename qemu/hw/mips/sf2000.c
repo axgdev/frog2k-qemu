@@ -265,6 +265,8 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t usb_phy1;
     uint32_t usb_phy2;
     uint32_t usb_phy3;
+    uint32_t usb_utmi380;
+    uint32_t usb_phy384;
     const char *storage_reset;
 } SF2000BoardProfileSpec;
 
@@ -309,6 +311,8 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .usb_phy1 = 0x00060606,
         .usb_phy2 = 0x06060606,
         .usb_phy3 = 0x00060606,
+        .usb_utmi380 = 0x00570740,
+        .usb_phy384 = 0x00000010,
         .storage_reset = "mode=safe experimental=0 status=okay clock=198000000 "
                          "bus-width=1 cap-highspeed=0 supports-highspeed=0 "
                          "uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 "
@@ -354,6 +358,8 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .usb_phy1 = 0x00060606,
         .usb_phy2 = 0x06060606,
         .usb_phy3 = 0x00060606,
+        .usb_utmi380 = 0x00570740,
+        .usb_phy384 = 0x00000010,
         .storage_reset = "mode=safe experimental=0 status=okay clock=198000000 "
                          "bus-width=1 cap-highspeed=0 supports-highspeed=0 "
                          "uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 "
@@ -650,6 +656,30 @@ static char *sf2000_machine_usb1_devctl_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x",
                            (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4));
+}
+
+static char *sf2000_machine_usb0_utmi380_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB0_BASE + 0x380, 4));
+}
+
+static char *sf2000_machine_usb1_utmi380_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x380, 4));
+}
+
+static char *sf2000_machine_usb0_phy384_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB0_BASE + 0x384, 4));
+}
+
+static char *sf2000_machine_usb1_phy384_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x384, 4));
 }
 
 static char *sf2000_machine_usb_root_hub_id_get(Object *obj, Error **errp)
@@ -1878,6 +1908,36 @@ restore:
     qemu_log_mask(LOG_UNIMP,
                   "sf2000: usb link state selftest ok board=%s\n",
                   profile->name);
+}
+
+static void sf2000_usb_phy_snapshot_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t usb0_utmi;
+    uint32_t usb0_phy;
+    uint32_t usb1_utmi;
+    uint32_t usb1_phy;
+
+    usb0_utmi = sf2000_usb_read(SF2000_USB0_BASE + 0x380, 4);
+    usb0_phy = sf2000_usb_read(SF2000_USB0_BASE + 0x384, 4);
+    usb1_utmi = sf2000_usb_read(SF2000_USB1_BASE + 0x380, 4);
+    usb1_phy = sf2000_usb_read(SF2000_USB1_BASE + 0x384, 4);
+
+    if (usb0_utmi != profile->usb_utmi380 ||
+        usb0_phy != profile->usb_phy384 ||
+        usb1_utmi != profile->usb_utmi380 ||
+        usb1_phy != profile->usb_phy384) {
+        error_report("sf2000: usb phy snapshot selftest failed board=%s "
+                     "usb0=%08x/%08x usb1=%08x/%08x expected=%08x/%08x",
+                     profile->name, usb0_utmi, usb0_phy, usb1_utmi, usb1_phy,
+                     profile->usb_utmi380, profile->usb_phy384);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: usb phy snapshot selftest ok board=%s "
+                  "usb0=0x%08x/0x%08x usb1=0x%08x/0x%08x\n",
+                  profile->name, usb0_utmi, usb0_phy, usb1_utmi, usb1_phy);
 }
 
 static void sf2000_audio_state_selftest(void)
@@ -5578,11 +5638,16 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_powered[1] = true;
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
+    sf2000_usb_regs[0][0x380 >> 2] = sf2000_board_profile_spec()->usb_utmi380;
+    sf2000_usb_regs[1][0x380 >> 2] = sf2000_board_profile_spec()->usb_utmi380;
+    sf2000_usb_regs[0][0x384 >> 2] = sf2000_board_profile_spec()->usb_phy384;
+    sf2000_usb_regs[1][0x384 >> 2] = sf2000_board_profile_spec()->usb_phy384;
     sf2000_audio_state_selftest();
     sf2000_audio_gate_live_selftest();
     sf2000_audio_gate_live_variant_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
+    sf2000_usb_phy_snapshot_selftest();
     g_autofree char *gate_live_l = sf2000_machine_audio_gate_l_live_get(NULL, NULL);
     g_autofree char *gate_live_r = sf2000_machine_audio_gate_r_live_get(NULL, NULL);
 
@@ -5757,6 +5822,14 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_usb0_devctl_get, NULL);
     object_class_property_add_str(oc, "usb1-devctl",
                                   sf2000_machine_usb1_devctl_get, NULL);
+    object_class_property_add_str(oc, "usb0-utmi380",
+                                  sf2000_machine_usb0_utmi380_get, NULL);
+    object_class_property_add_str(oc, "usb1-utmi380",
+                                  sf2000_machine_usb1_utmi380_get, NULL);
+    object_class_property_add_str(oc, "usb0-phy384",
+                                  sf2000_machine_usb0_phy384_get, NULL);
+    object_class_property_add_str(oc, "usb1-phy384",
+                                  sf2000_machine_usb1_phy384_get, NULL);
 }
 
 static const TypeInfo sf2000_machine_type = {

@@ -115,10 +115,13 @@ until a board selector is needed. The next modelable board differences are:
   the status bytes, and the write path distinguishes powered-disconnected from
   session-active so the queryable state mirrors the probe logs more closely.
   The live devctl register snapshot is also exposed as `usb0-devctl` and
-  `usb1-devctl` so the raw controller state can be compared directly against
-  the boot-time USB probe logs.
-  The boot log now also self-tests the USB reset-block readback against the
-  captured powered-disconnected shell on both controllers.
+  `usb1-devctl`, and the live UTMI/PHY snapshot is exposed as
+  `usb0-utmi380`, `usb1-utmi380`, `usb0-phy384`, and `usb1-phy384` so the raw
+  controller state can be compared directly against the boot-time USB probe
+  logs.
+  The boot log now also self-tests the USB reset-block readback and the live
+  UTMI/PHY snapshot against the captured powered-disconnected shell on both
+  controllers.
   The current probe evidence points to one powered downstream port per
   controller, with no child device attached.
 - The generic GPIO-L output latch is also exposed as `gpio-l-out` so the
