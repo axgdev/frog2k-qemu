@@ -40,6 +40,7 @@ The repository already has useful validation checkpoints:
 - `make smoke-gb300-asd`
 - `make smoke-gb300-fatfs`
 - `make smoke-gb300-display`
+- `make smoke-board-contract`
 - `make smoke-linux-elf`
 - `make smoke-linux-reboot`
 - `make smoke-linux-buildroot-reset-snapshot`
@@ -51,6 +52,7 @@ These targets establish the current baseline for:
 - stock ASD direct boot;
 - GB300 direct boot on the shared machine;
 - GMA scanout and panel setup;
+- board-profile and topology metadata through QMP property queries;
 - keypad input delivery;
 - direct Linux ELF boot;
 - Linux watchdog reboot back into the bootloader.
