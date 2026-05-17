@@ -546,6 +546,12 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-fade90"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-id"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-ports"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-ctl0"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-ctl1"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-phy0"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-phy1"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-phy2"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-phy3"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-state"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-state"}}\n'; \
 	 printf '{"execute":"quit"}\n') | \
@@ -566,6 +572,11 @@ smoke-board-contract: build
 	grep -q '"return": "0x008f0000"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1d6b:0002"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x07000101"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000002"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x06060000"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00060606"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x06060606"' build/logs/smoke-board-contract.console
 	grep -q '"return": "powered-disconnected"' build/logs/smoke-board-contract.console
 	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-board-contract.log
 

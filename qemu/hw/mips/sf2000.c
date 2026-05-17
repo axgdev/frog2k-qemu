@@ -237,6 +237,12 @@ typedef struct SF2000BoardProfileSpec {
     const char *usb1_route;
     const char *usb_root_hub_id;
     uint32_t usb_root_hub_ports;
+    uint32_t usb_ctl0;
+    uint32_t usb_ctl1;
+    uint32_t usb_phy0;
+    uint32_t usb_phy1;
+    uint32_t usb_phy2;
+    uint32_t usb_phy3;
 } SF2000BoardProfileSpec;
 
 static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
@@ -255,6 +261,12 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .usb1_route = "usb-a",
         .usb_root_hub_id = "1d6b:0002",
         .usb_root_hub_ports = 1,
+        .usb_ctl0 = 0x07000101,
+        .usb_ctl1 = 0x00000002,
+        .usb_phy0 = 0x06060000,
+        .usb_phy1 = 0x00060606,
+        .usb_phy2 = 0x06060606,
+        .usb_phy3 = 0x00060606,
     },
     {
         .name = "gb300",
@@ -271,6 +283,12 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .usb1_route = "usb-a",
         .usb_root_hub_id = "1d6b:0002",
         .usb_root_hub_ports = 1,
+        .usb_ctl0 = 0x07000101,
+        .usb_ctl1 = 0x00000002,
+        .usb_phy0 = 0x06060000,
+        .usb_phy1 = 0x00060606,
+        .usb_phy2 = 0x06060606,
+        .usb_phy3 = 0x00060606,
     },
 };
 
@@ -283,6 +301,7 @@ static uint32_t sf2000_audio_i2s_fade90;
 static bool sf2000_storage_selftest_raw;
 static bool sf2000_usb_link_powered[2];
 static bool sf2000_usb_link_active[2];
+static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
 static uint32_t sf2000_panel_sample_readback(SF2000LCDState *s,
                                              uint32_t value);
 
@@ -424,6 +443,36 @@ static char *sf2000_machine_usb_root_hub_id_get(Object *obj, Error **errp)
 static char *sf2000_machine_usb_root_hub_ports_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("%u", sf2000_board_profile_spec()->usb_root_hub_ports);
+}
+
+static char *sf2000_machine_usb_ctl0_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_ctl0);
+}
+
+static char *sf2000_machine_usb_ctl1_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_ctl1);
+}
+
+static char *sf2000_machine_usb_phy0_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy0);
+}
+
+static char *sf2000_machine_usb_phy1_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy1);
+}
+
+static char *sf2000_machine_usb_phy2_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy2);
+}
+
+static char *sf2000_machine_usb_phy3_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy3);
 }
 
 static void sf2000_audio_callback(void *opaque, int free)
@@ -655,7 +704,6 @@ static uint32_t sf2000_rgb565_lut[UINT16_MAX + 1u];
 static bool sf2000_rgb565_lut_ready;
 static uint32_t sf2000_rgb565_to_surface(uint16_t pix);
 static void sf2000_gma_present(uint32_t dmba_addr);
-static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
 static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
 
 static uint64_t sf2000_cpu_hz(void)
@@ -5144,6 +5192,18 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_usb_root_hub_id_get, NULL);
     object_class_property_add_str(oc, "usb-root-hub-ports",
                                   sf2000_machine_usb_root_hub_ports_get, NULL);
+    object_class_property_add_str(oc, "usb-ctl0",
+                                  sf2000_machine_usb_ctl0_get, NULL);
+    object_class_property_add_str(oc, "usb-ctl1",
+                                  sf2000_machine_usb_ctl1_get, NULL);
+    object_class_property_add_str(oc, "usb-phy0",
+                                  sf2000_machine_usb_phy0_get, NULL);
+    object_class_property_add_str(oc, "usb-phy1",
+                                  sf2000_machine_usb_phy1_get, NULL);
+    object_class_property_add_str(oc, "usb-phy2",
+                                  sf2000_machine_usb_phy2_get, NULL);
+    object_class_property_add_str(oc, "usb-phy3",
+                                  sf2000_machine_usb_phy3_get, NULL);
     object_class_property_add_str(oc, "usb0-state",
                                   sf2000_machine_usb0_state_get, NULL);
     object_class_property_add_str(oc, "usb1-state",

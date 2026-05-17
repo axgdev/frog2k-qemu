@@ -88,10 +88,13 @@ until a board selector is needed. The next modelable board differences are:
   `session-active` even though downstream enumeration is still not modeled.
   The root hub shape is also exposed as read-only `usb-root-hub-id` and
   `usb-root-hub-ports` properties so the observed bus topology can be matched
-  against probe logs. The controller readback now also reflects the powered
-  host-shell state instead of returning only zeroes for the status bytes. The
-  current probe evidence points to one powered downstream port per controller,
-  with no child device attached.
+  against probe logs. The observed USB reset block is also queryable through
+  read-only `usb-ctl0`, `usb-ctl1`, `usb-phy0`, `usb-phy1`, `usb-phy2`, and
+  `usb-phy3` properties, which line up with the capture values from
+  `logprobe0001.txt` and `logprobe0014.txt`. The controller readback now also
+  reflects the powered host-shell state instead of returning only zeroes for
+  the status bytes. The current probe evidence points to one powered
+  downstream port per controller, with no child device attached.
 
 ## Current GB300 Boot Status
 

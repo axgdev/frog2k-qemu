@@ -93,10 +93,12 @@ strong oracle:
   remains a board-behavior problem rather than a completed host oracle, even
   though the machine now exposes read-only USB link-state properties that
   distinguish disconnected, powered-disconnected, and session-active states,
-  plus root-hub identity/port-count metadata, and the controller readback now
-  reflects the powered host-shell status instead of just returning zeros, with
-  the current probe evidence still pointing to one powered downstream port per
-  controller and no child device;
+  plus root-hub identity/port-count metadata and the observed USB reset block
+  (`usb-ctl0`, `usb-ctl1`, `usb-phy0`..`usb-phy3`) as QMP-visible board
+  contract properties; the controller readback now reflects the powered
+  host-shell status instead of just returning zeros, with the current probe
+  evidence still pointing to one powered downstream port per controller and no
+  child device;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible
