@@ -96,7 +96,9 @@ than actual host/device negotiation. The boot-time reset shell now reads back
 `POWER=0x70` and `DEVCTL=0x99`, matching the captured powered-disconnected
 snapshot from the probe logs, and the live devctl readback now steps through
 `0x80` and `0x81` for the powered-disconnected and session-active states seen
-in the probe history.
+in the probe history. The raw power-byte snapshot is now also queryable as
+`usb0-power` and `usb1-power`, which keeps the captured `0x70` reset shell
+visible alongside the devctl and PHY snapshots.
 
 ## Priority 4: Skip-Ahead Workflows
 

@@ -136,6 +136,9 @@ until a board selector is needed. The next modelable board differences are:
   live devctl snapshot also steps through `0x80` and `0x81` when the model is
   driven through the powered-disconnected and session-active transitions that
   appear in the probe logs.
+  The raw power-byte shell is also exposed as `usb0-power` and `usb1-power`
+  so the captured `0x70` reset state stays visible alongside the devctl and
+  PHY snapshots.
   The boot log now also self-tests the USB reset-block readback and the live
   UTMI/PHY snapshot against the captured powered-disconnected shell on both
   controllers.

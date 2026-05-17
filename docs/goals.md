@@ -118,6 +118,9 @@ strong oracle:
   current contract matches the captured powered-disconnected shell at reset,
   and the live devctl snapshot now also walks through `0x80` and `0x81` when
   the link is driven through the probe-log powered/session transitions;
+  the raw power-byte snapshot is now also queryable as `usb0-power` and
+  `usb1-power`, which keeps the captured `0x70` reset shell visible alongside
+  the devctl and PHY snapshots;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible

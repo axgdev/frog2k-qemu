@@ -739,6 +739,18 @@ static char *sf2000_machine_usb1_devctl_get(Object *obj, Error **errp)
                            (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4));
 }
 
+static char *sf2000_machine_usb0_power_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB0_BASE + 0x00, 4));
+}
+
+static char *sf2000_machine_usb1_power_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x00, 4));
+}
+
 static char *sf2000_machine_usb0_utmi380_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x",
@@ -5928,10 +5940,13 @@ static void sf2000_init(MachineState *machine)
     g_autofree char *gate_live_l = sf2000_machine_audio_gate_l_live_get(NULL, NULL);
     g_autofree char *gate_live_r = sf2000_machine_audio_gate_r_live_get(NULL, NULL);
 
+    g_autofree char *usb0_power = sf2000_machine_usb0_power_get(NULL, NULL);
+    g_autofree char *usb1_power = sf2000_machine_usb1_power_get(NULL, NULL);
+
     info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s open_returns=%s close_returns=%s hw_close=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u "
                 "pwm2_backlight_active=%s "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
-                "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u "
+                "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s usb0_power=%s usb1_power=%s hub=%s ports=%u "
                 "storage-reset=%s",
                 sf2000_board_profile_name(),
                 sf2000_board_profile_spec()->panel_id,
@@ -5964,6 +5979,8 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->audio_hw_dac,
                 sf2000_board_profile_spec()->usb0_route,
                 sf2000_board_profile_spec()->usb1_route,
+                usb0_power,
+                usb1_power,
                 sf2000_board_profile_spec()->usb_root_hub_id,
                 sf2000_board_profile_spec()->usb_root_hub_ports,
                 sf2000_board_profile_spec()->storage_reset);
@@ -6115,6 +6132,10 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_usb0_devctl_get, NULL);
     object_class_property_add_str(oc, "usb1-devctl",
                                   sf2000_machine_usb1_devctl_get, NULL);
+    object_class_property_add_str(oc, "usb0-power",
+                                  sf2000_machine_usb0_power_get, NULL);
+    object_class_property_add_str(oc, "usb1-power",
+                                  sf2000_machine_usb1_power_get, NULL);
     object_class_property_add_str(oc, "usb0-utmi380",
                                   sf2000_machine_usb0_utmi380_get, NULL);
     object_class_property_add_str(oc, "usb1-utmi380",
