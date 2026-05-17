@@ -139,6 +139,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_WDT_SIZE        0x00000100ULL
 #define SF2000_SYSCLK_EXT_BASE 0x18801000ULL
 #define SF2000_SYSCLK_EXT_SIZE 0x00000100ULL
+#define SF2000_AUDIO_I2S_BASE  0x1880a000ULL
+#define SF2000_AUDIO_I2S_SIZE  0x00000100ULL
+#define SF2000_AUDIO_I2S_CTRL3C (SF2000_AUDIO_I2S_BASE + 0x3c)
+#define SF2000_AUDIO_I2S_FADE90 (SF2000_AUDIO_I2S_BASE + 0x90)
 #define SF2000_SND_DAC_BASE    0x1880b000ULL
 #define SF2000_SND_DAC_SIZE    0x00000100ULL
 #define SF2000_USB0_BASE       0x18844000ULL
@@ -265,6 +269,8 @@ static char *sf2000_board_profile = NULL;
 static bool sf2000_audio_powered;
 static uint32_t sf2000_audio_dac_value;
 static bool sf2000_audio_dac_written;
+static uint32_t sf2000_audio_i2s_ctrl3c;
+static uint32_t sf2000_audio_i2s_fade90;
 static bool sf2000_usb_link_powered[2];
 static bool sf2000_usb_link_active[2];
 
@@ -326,6 +332,16 @@ static char *sf2000_machine_audio_period_frames_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_periods_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_periods);
+}
+
+static char *sf2000_machine_audio_i2s_ctrl3c_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_audio_i2s_ctrl3c);
+}
+
+static char *sf2000_machine_audio_i2s_fade90_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_audio_i2s_fade90);
 }
 
 static char *sf2000_machine_usb0_route_get(Object *obj, Error **errp)
@@ -416,7 +432,8 @@ static const SF2000RegDefault sf2000_reg_defaults[] = {
     { 0x188004c0, 0x00000001 }, { 0x188004e4, 0x07000101 },
     { 0x188004e8, 0x00000002 }, { 0x18800500, 0x06060000 },
     { 0x18800504, 0x00060606 }, { 0x18800508, 0x06060606 },
-    { 0x1880050c, 0x00060606 },
+    { 0x1880050c, 0x00060606 }, { 0x1880a03c, 0x0000ff41 },
+    { 0x1880a090, 0x008f0000 },
     { 0x18806000, 0x80020000 }, { 0x18806004, 0x00000000 },
     { 0x18806008, 0x00000000 }, { 0x18806010, 0x00e8c420 },
     { 0x18806020, 0x00000000 }, { 0x18806024, 0x00000000 },
@@ -1768,6 +1785,8 @@ static void sf2000_log_mmio(const char *kind, hwaddr addr, uint64_t value,
          addr < SF2000_SYSCLK_EXT_BASE + SF2000_SYSCLK_EXT_SIZE) ||
         (addr >= SF2000_SND_DAC_BASE &&
          addr < SF2000_SND_DAC_BASE + SF2000_SND_DAC_SIZE) ||
+        (addr >= SF2000_AUDIO_I2S_BASE &&
+         addr < SF2000_AUDIO_I2S_BASE + SF2000_AUDIO_I2S_SIZE) ||
         (addr >= SF2000_DSC_BOOT_BASE &&
          addr < SF2000_DSC_BOOT_BASE + SF2000_DSC_BOOT_SIZE) ||
         (addr >= 0x1884c000 && addr < 0x1884c040 &&
@@ -1779,6 +1798,7 @@ static void sf2000_log_mmio(const char *kind, hwaddr addr, uint64_t value,
         addr == SF2000_GPIO_L_OUT || addr == 0x18800354 ||
         addr == 0x18800058 || addr == 0x18800358 ||
         addr == 0x1880a038 || addr == 0x1880a03a ||
+        addr == SF2000_AUDIO_I2S_CTRL3C || addr == SF2000_AUDIO_I2S_FADE90 ||
         (addr == SF2000_GPIO_L_IN && g_str_equal(kind, "mmio-read")) ||
         (addr == SF2000_GPIO_L_ISR && g_str_equal(kind, "mmio-read")) ||
         (addr == SF2000_GPIO_R_IN && g_str_equal(kind, "mmio-read")) ||
@@ -3440,6 +3460,10 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                         sf2000_board_profile_spec()->audio_route,
                         full_addr, value);
         }
+    } else if (full_addr == SF2000_AUDIO_I2S_CTRL3C) {
+        sf2000_audio_i2s_ctrl3c = value;
+    } else if (full_addr == SF2000_AUDIO_I2S_FADE90) {
+        sf2000_audio_i2s_fade90 = value;
     } else if (sf2000_wdt_decode(full_addr)) {
         unsigned wdt_offset = full_addr & 0xff;
 
@@ -4462,6 +4486,8 @@ static void sf2000_init(MachineState *machine)
     sf2000_adc_ctrl[3] = 0x00000001;
     sf2000_irq_enable1 = 0x00480415;
     sf2000_irq_enable2 = 0x003c0008;
+    sf2000_audio_i2s_ctrl3c = 0x0000ff41;
+    sf2000_audio_i2s_fade90 = 0x008f0000;
     sf2000_i2c_data[0] = 0x00;
     sf2000_i2c_isr[0] = 0x00;
     sf2000_i2c_ier[0] = 0x00;
@@ -4565,6 +4591,10 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_period_frames_get, NULL);
     object_class_property_add_str(oc, "audio-periods",
                                   sf2000_machine_audio_periods_get, NULL);
+    object_class_property_add_str(oc, "audio-i2s-ctrl3c",
+                                  sf2000_machine_audio_i2s_ctrl3c_get, NULL);
+    object_class_property_add_str(oc, "audio-i2s-fade90",
+                                  sf2000_machine_audio_i2s_fade90_get, NULL);
     object_class_property_add_str(oc, "usb0-route",
                                   sf2000_machine_usb0_route_get, NULL);
     object_class_property_add_str(oc, "usb1-route",

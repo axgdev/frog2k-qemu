@@ -91,7 +91,8 @@ strong oracle:
 - remaining board-specific audio, amplifier, and USB behavior beyond the
   explicit `board-profile` selector, route properties, the observed audio
   setup write in the stock display smoke, and the machine-visible
-  `audio-power`, `audio-dac-value`, and audio playback contract properties.
+  `audio-power`, `audio-dac-value`, `audio-i2s-ctrl3c`, `audio-i2s-fade90`,
+  and audio playback contract properties.
   The baseline boot log now prints the resolved audio and USB topology data,
   so the remaining work is the actual playback and enumeration behavior rather
   than just making the contract visible.
