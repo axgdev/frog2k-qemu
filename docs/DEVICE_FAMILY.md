@@ -78,7 +78,9 @@ until a board selector is needed. The next modelable board differences are:
   `audio-channels`, `audio-period-frames`, `audio-periods`,
   `audio-i2s-ctrl3c`, and `audio-i2s-fade90` properties, but it still needs the
   full amplifier chain and guest-driven PCM flow before this becomes a
-  complete functional model.
+  complete functional model. The boot log now also self-tests the audio
+  mute/power transition so the reset-muted contract is checked before
+  firmware runs.
   The baseline boot log now prints that audio contract, the gate route, and
   the USB topology in one line so the regression smoke can verify the board
   shape directly.

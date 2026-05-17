@@ -126,6 +126,9 @@ The captured hardware logs show more than a DAC write:
 - the captured playback open route (`sf2000_left_only`) that now appears as
   a QMP-visible `audio-open-route` property and matches the mono-left
   playback contract seen in the hardware logs;
+- the boot-checked mute/power transition self-test now verifies the reset
+  muted state before firmware runs, but it is still only a contract check and
+  not a full analog implementation;
 - a fixed 44.1 kHz, mono-left, 1024-frame, 8-period playback contract;
 - PWM/backlight activity that travels alongside the audio probe.
 

@@ -1779,6 +1779,47 @@ restore:
                   profile->name);
 }
 
+static void sf2000_audio_state_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered = sf2000_audio_powered;
+    uint32_t saved_fade = sf2000_audio_i2s_fade90;
+    bool after_power;
+    bool after_fade;
+
+    sf2000_audio_powered = false;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    if (sf2000_audio_output_active()) {
+        error_report("sf2000: audio state selftest failed board=%s reset mute active",
+                     profile->name);
+        goto restore;
+    }
+
+    sf2000_audio_powered = true;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    after_power = sf2000_audio_output_active();
+    sf2000_audio_i2s_fade90 = 0;
+    sf2000_audio_set_backend_active();
+    after_fade = sf2000_audio_output_active();
+    if (!after_power || after_fade) {
+        error_report("sf2000: audio state selftest failed board=%s power=%d fade=%d",
+                     profile->name, after_power, after_fade);
+        goto restore;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio state selftest ok board=%s active=%s mute=%s\n",
+                  profile->name, after_power ? "true" : "false",
+                  after_fade ? "false" : "true");
+
+restore:
+    sf2000_audio_powered = saved_powered;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+}
+
 static bool sf2000_pwm_decode(hwaddr full_addr, unsigned *channel,
                               unsigned *offset)
 {
@@ -5356,6 +5397,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_powered[1] = true;
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
+    sf2000_audio_state_selftest();
     sf2000_usb_reset_block_selftest();
     sf2000_usb_link_state_selftest();
     info_report("sf2000: board profile=%s panel=0x%08x audio=%s open=%s sr=%u ch=%u "
