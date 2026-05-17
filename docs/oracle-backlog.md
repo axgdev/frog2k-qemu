@@ -146,7 +146,8 @@ The captured hardware logs show more than a DAC write:
   `audio-hw-snd0`, and `audio-hw-dac` properties;
   - the captured PWM2/backlight reset snapshot (`clk=0xc0010000`,
     `lohi=0x05470547`, `ctrl=0x00000090`) that now appears as a QMP-visible
-    `pwm2-backlight` property;
+    `pwm2-backlight` property, and the live on/off state that now appears as
+    `pwm2-backlight-active`;
   - the captured playback open route (`sf2000_left_only`) that now appears as
   a QMP-visible `audio-open-route` property and matches the mono-left
   playback contract seen in the hardware logs;

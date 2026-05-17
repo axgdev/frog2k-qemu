@@ -637,6 +637,24 @@ static char *sf2000_machine_pwm2_backlight_get(Object *obj, Error **errp)
                            pwm_clk_ctrl, pwm2_lohi, pwm2_ctrl);
 }
 
+static bool sf2000_pwm2_backlight_active(void)
+{
+    uint32_t pwm_clk_ctrl = 0;
+    uint32_t pwm2_ctrl = 0;
+
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &pwm_clk_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + 2u * SF2000_PWM_CH_STRIDE + 4u,
+                      &pwm2_ctrl);
+    return (pwm_clk_ctrl & (SF2000_PWM_CLKEN | SF2000_PWM_ENABLE)) ==
+            (SF2000_PWM_CLKEN | SF2000_PWM_ENABLE) &&
+           (pwm2_ctrl & SF2000_PWM_CH_ENABLE);
+}
+
+static char *sf2000_machine_pwm2_backlight_active_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_pwm2_backlight_active() ? "true" : "false");
+}
+
 static char *sf2000_machine_gpio_l_out_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x", sf2000_gpio_l_out);
@@ -5007,6 +5025,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     uint32_t sample_w, sample_h;
     uint32_t width, height, bpp;
     bool scale_x, scale_y;
+    bool backlight_active;
     int y;
 
     if (!s || !dmba_addr) {
@@ -5122,6 +5141,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         linebuf_alloc = g_malloc(pitch);
         linebuf = linebuf_alloc;
     }
+    backlight_active = sf2000_pwm2_backlight_active();
     for (y = 0; y < height; y++) {
         uint32_t *dst = (uint32_t *)(surface_data(surface) +
                         (sy + y) * surface_stride(surface)) + sx;
@@ -5151,6 +5171,9 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
             } else {
                 uint8_t c = linebuf[src_x];
                 dst[x] = 0xff000000u | (c << 16) | (c << 8) | c;
+            }
+            if (!backlight_active) {
+                dst[x] = 0xff000000u;
             }
         }
     }
@@ -5743,6 +5766,7 @@ static void sf2000_init(MachineState *machine)
     g_autofree char *gate_live_r = sf2000_machine_audio_gate_r_live_get(NULL, NULL);
 
     info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s open_returns=%s close_returns=%s hw_close=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u "
+                "pwm2_backlight_active=%s "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u "
                 "storage-reset=%s",
@@ -5759,6 +5783,7 @@ static void sf2000_init(MachineState *machine)
                 sf2000_audio_output_active() ? "open" : "closed",
                 gate_live_l,
                 gate_live_r,
+                sf2000_pwm2_backlight_active() ? "true" : "false",
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
                 sf2000_board_profile_spec()->audio_channels,
                 sf2000_board_profile_spec()->audio_period_frames,
@@ -5887,6 +5912,9 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_gpio_l_out_get, NULL);
     object_class_property_add_str(oc, "pwm2-backlight",
                                   sf2000_machine_pwm2_backlight_get, NULL);
+    object_class_property_add_str(oc, "pwm2-backlight-active",
+                                  sf2000_machine_pwm2_backlight_active_get,
+                                  NULL);
     object_class_property_add_str(oc, "audio-i2s-ctrl3c",
                                   sf2000_machine_audio_i2s_ctrl3c_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-fade90",

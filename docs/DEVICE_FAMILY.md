@@ -97,7 +97,8 @@ until a board selector is needed. The next modelable board differences are:
   `audio-close-returns` so the close-path result stays visible too.
   The PWM2/backlight reset snapshot is also exposed as `pwm2-backlight` so
   the boot-time backlight defaults stay visible alongside the rest of the
-  audio contract.
+  audio contract, and the live `pwm2-backlight-active` property reflects the
+  current on/off state that now blanks scanout when the backlight is off.
   The baseline boot log now prints that audio contract, the gate route, and
   the USB topology in one line so the regression smoke can verify the board
   shape directly.
