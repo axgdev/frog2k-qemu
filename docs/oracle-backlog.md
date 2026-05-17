@@ -132,6 +132,11 @@ The captured hardware logs show more than a DAC write:
   - the captured audio-close return tuple (`mute_ret=-1`, `drop_ret=0`,
     `free_ret=0`) that now appears as a QMP-visible `audio-close-returns`
     property;
+  - the captured audio hardware close snapshot (`backend=2`,
+    `snd0=0x14fc0082`, `dac=0x420003a8`, `hw_ret=-1`,
+    `dma=0x00000000/0`, `hw_rate=0`, `hw_ch=0`, `hw_fmt=0`,
+    `hw_period=0`, `hw_periods=0`) that now appears as a QMP-visible
+    `audio-hw-close` property;
   - board-side mux state changes around mute/unmute and volume changes;
   - the captured mux-open snapshot (`l22=0 l23=0 l24=0 l25=0 l26=0 l27=0
   l28=0 l29=0 r07=0`) that now appears as a QMP-visible `audio-mux`

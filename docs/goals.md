@@ -120,7 +120,7 @@ strong oracle:
   `audio-power`, `audio-backend-ready`, `audio-dac-value`,
   `audio-gate-route`, `audio-gate-l`, `audio-gate-r`, `audio-volume`,
   `audio-gain`, `audio-muted`, `audio-open-returns`,
-  `audio-close-returns`, `pwm2-backlight`, `audio-i2s-ctrl3c`,
+  `audio-close-returns`, `audio-hw-close`, `pwm2-backlight`, `audio-i2s-ctrl3c`,
   `audio-i2s-fade90`, and audio playback contract
   properties. The baseline boot log now prints the resolved audio and USB
   topology data, and QEMU now opens a live audio backend sink, so the

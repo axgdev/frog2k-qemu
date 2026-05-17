@@ -144,6 +144,9 @@ until a board selector is needed. The next modelable board differences are:
 - The captured audio hardware open snapshot is also exposed as
   `audio-hw-backend`, `audio-hw-snd0`, and `audio-hw-dac` so the backend
   handshake seen in probe logs can be queried directly.
+- The captured audio hardware close snapshot is also exposed as
+  `audio-hw-close` so the close-path handshake seen in probe logs can be
+  queried directly.
 - The captured playback open route is exposed as `audio-open-route` so the
   mono-left libretro-open path can be checked directly from QMP as well as
   from the boot log.
