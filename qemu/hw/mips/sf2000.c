@@ -212,6 +212,18 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_RF_CLK_BIT      28
 #define SF2000_RF_CS_BIT       29
 
+static char *sf2000_board_profile = NULL;
+
+static const char *sf2000_board_profile_name(void)
+{
+    return sf2000_board_profile ? sf2000_board_profile : "sf2000";
+}
+
+static bool sf2000_board_profile_is_gb300(void)
+{
+    return strcmp(sf2000_board_profile_name(), "gb300") == 0;
+}
+
 typedef struct SF2000RegDefault {
     hwaddr addr;
     uint32_t value;
@@ -3918,6 +3930,12 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
 {
     SF2000LCDState *s = SF2000_LCD(dev);
 
+    if (sf2000_board_profile_is_gb300() &&
+        (!s->width || s->width == SF2000_LCD_WIDTH) &&
+        (!s->height || s->height == SF2000_LCD_HEIGHT)) {
+        s->width = 240;
+        s->height = 320;
+    }
     if (!s->width) {
         s->width = SF2000_LCD_WIDTH;
     }
@@ -3934,6 +3952,8 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     s->panel_x1 = SF2000_LCD_WIDTH - 1;
     s->panel_y1 = SF2000_LCD_HEIGHT - 1;
     sf2000_lcd = s;
+    info_report("sf2000: lcd profile=%s geometry=%ux%u",
+                sf2000_board_profile_name(), s->width, s->height);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &sf2000_lcd_ops, s,
                           TYPE_SF2000_LCD, SF2000_LCD_MMIO_SIZE);
@@ -3948,6 +3968,27 @@ static const Property sf2000_lcd_properties[] = {
     DEFINE_PROP_UINT32("format", SF2000LCDState, format, 0),
     DEFINE_PROP_UINT32("control", SF2000LCDState, control, 0),
 };
+
+static char *sf2000_machine_board_profile_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_name());
+}
+
+static void sf2000_machine_board_profile_set(Object *obj, const char *value,
+                                             Error **errp)
+{
+    if (!value || !value[0]) {
+        g_free(sf2000_board_profile);
+        sf2000_board_profile = g_strdup("sf2000");
+        return;
+    }
+    if (strcmp(value, "sf2000") != 0 && strcmp(value, "gb300") != 0) {
+        error_setg(errp, "unsupported SF2000 board profile '%s'", value);
+        return;
+    }
+    g_free(sf2000_board_profile);
+    sf2000_board_profile = g_strdup(value);
+}
 
 static void sf2000_lcd_class_init(ObjectClass *klass, const void *data)
 {
@@ -4294,6 +4335,9 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
     mc->no_parallel = true;
     mc->no_floppy = true;
     mc->no_cdrom = true;
+    object_class_property_add_str(oc, "board-profile",
+                                  sf2000_machine_board_profile_get,
+                                  sf2000_machine_board_profile_set);
 }
 
 static const TypeInfo sf2000_machine_type = {

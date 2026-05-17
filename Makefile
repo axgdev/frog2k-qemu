@@ -48,6 +48,7 @@ VIDEO_FRAMERATE ?= 12
 VIDEO_GMA_DUMP_LIMIT ?= 300
 SD_IMAGE ?=
 SD_ARGS = $(if $(SD_IMAGE),-drive if=none,id=sd0,file=$(SD_IMAGE),format=raw,)
+GB300_MACHINE_ARGS ?= -M sf2000,board-profile=gb300
 
 -include config.mk
 
@@ -479,7 +480,7 @@ smoke-stock-display: build
 
 smoke-gb300-asd: build check-gb300-asd
 	mkdir -p build/logs
-	timeout 3s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) -kernel $(GB300_ASD) \
+	timeout 3s $(QEMU_BIN) $(GB300_MACHINE_ARGS) -bios $(FIRMWARE) -kernel $(GB300_ASD) \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D build/logs/smoke-gb300-asd.log \
 		> build/logs/smoke-gb300-asd.console 2>&1 || test $$? -eq 124
@@ -488,7 +489,7 @@ smoke-gb300-asd: build check-gb300-asd
 
 smoke-gb300-fatfs: build check-gb300-asd
 	mkdir -p build/logs
-	timeout 45s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) -kernel $(GB300_ASD) \
+	timeout 45s $(QEMU_BIN) $(GB300_MACHINE_ARGS) -bios $(FIRMWARE) -kernel $(GB300_ASD) \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D build/logs/smoke-gb300-fatfs.log \
 		> build/logs/smoke-gb300-fatfs.console 2>&1 || test $$? -eq 124
@@ -497,11 +498,12 @@ smoke-gb300-fatfs: build check-gb300-asd
 
 smoke-gb300-display: build check-gb300-asd
 	mkdir -p build/logs
-	SF2000_TRACE_GMA=1 timeout 45s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) -kernel $(GB300_ASD) \
+	SF2000_TRACE_GMA=1 timeout 45s $(QEMU_BIN) $(GB300_MACHINE_ARGS) -bios $(FIRMWARE) -kernel $(GB300_ASD) \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D build/logs/smoke-gb300-display.log \
 		> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-gb300-display.console
+	grep -q 'sf2000: lcd profile=gb300 geometry=240x320' build/logs/smoke-gb300-display.console
 	grep -q 'uart: L115(board.c):LCD_TYPE_ST7789V_MCU8080' build/logs/smoke-gb300-display.log
 	grep -q 'gma-present .*mode=12' build/logs/smoke-gb300-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-gb300-display.log

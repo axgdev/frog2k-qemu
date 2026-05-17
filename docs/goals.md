@@ -64,10 +64,11 @@ The next work should focus on the pieces that still prevent QEMU from being a
 strong oracle:
 
 - higher-fidelity display timing and any remaining panel-status corner cases
-  beyond the synthesized panel-ID readback; the current Linux panel smoke is
-  still blocked before any `sf2000-screen` C-side marker by a repeated
-  `epc=0x047c0050` TLB fault loop, so the next panel pass likely needs a tiny
-  fastprobe rather than the full screen init body;
+  beyond the synthesized panel-ID readback and the new explicit
+  `board-profile` selector; the current Linux panel smoke is still blocked
+  before any `sf2000-screen` C-side marker by a repeated `epc=0x047c0050`
+  TLB fault loop, so the next panel pass likely needs a tiny fastprobe rather
+  than the full screen init body;
 - writable storage semantics, including mirrored FAT updates and MMC ioctl
   write paths; the current Linux storage fastprobe now proves the HC15
   controller probe and command-register traffic, but the userspace probe
@@ -75,7 +76,8 @@ strong oracle:
   oracle stable while separating it from the initrd/device-node path;
 - audio and amplifier routing;
 - USB host and gadget behavior;
-- board-profile modeling for the family variants that still share one machine.
+- remaining board-specific audio, amplifier, and USB routing beyond the
+  explicit `board-profile` selector.
 - direct snapshot ergonomics if we decide to wrap the current QMP migration
   flow in a shorter, less QMP-specific resume path.
 

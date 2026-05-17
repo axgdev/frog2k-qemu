@@ -50,13 +50,15 @@ until a board selector is needed. The next modelable board differences are:
   `0xda`, `0xdb`, and `0xdc`.
 - Panel geometry and transform: preserve the common 320x240 framebuffer path,
   but make MADCTL and set-address-window behavior visible enough to catch
-  rotated or mirrored init mistakes.
+  rotated or mirrored init mistakes. QEMU now has an explicit `board-profile`
+  selector, and GB300 display tests use `board-profile=gb300` so the rotated
+  240x320 geometry comes from board data instead of a hidden firmware quirk.
 - Input matrix: keep local L23/L24 shift-register scanning separate from the
   GPIO-bitbanged RF bus on L27/L28/L29. GB300-family USB gamepad support should
   be modeled as a separate USB host path, not mixed into the RF receiver.
 - Audio and amplifier routing: UniFrog already uses LCD ID clues for board
-  routing. QEMU should move toward an explicit board profile once those routes
-  are validated.
+  routing. Keep following the explicit board profile path for those routes
+  once the remaining board-specific probes are validated.
 - Firmware images: SF2000 stock uses
   `/root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd`; GB300 stock
   firmware is available at
