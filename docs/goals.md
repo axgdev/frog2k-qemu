@@ -53,7 +53,7 @@ These targets establish the current baseline for:
 - stock ASD direct boot;
 - GB300 direct boot on the shared machine;
 - GMA scanout and panel setup;
-- board-profile and topology metadata through QMP property queries;
+- board-profile, panel identity/timing, and topology metadata through QMP property queries;
 - keypad input delivery;
 - direct Linux ELF boot;
 - Linux watchdog reboot back into the bootloader.
@@ -68,7 +68,8 @@ strong oracle:
 
 - higher-fidelity display timing and any remaining panel-status corner cases
   beyond the synthesized panel-ID readback and the new explicit
-  `board-profile` selector and the new `panel-te-hz` timing property; the
+  `board-profile` selector and the new machine-visible `panel-id` and
+  `panel-te-hz` timing properties; the
   current Linux panel smoke is still blocked before any `sf2000-screen`
   C-side marker by a repeated `epc=0x047c0050` TLB fault loop, so the next
   panel pass likely needs a tiny fastprobe rather than the full screen init

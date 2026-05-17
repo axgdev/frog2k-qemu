@@ -227,6 +227,7 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t lcd_width;
     uint32_t lcd_height;
     uint32_t panel_te_hz;
+    uint32_t panel_id;
     const char *audio_route;
     uint32_t audio_sample_rate_hz;
     uint32_t audio_channels;
@@ -244,6 +245,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .lcd_width = SF2000_LCD_WIDTH,
         .lcd_height = SF2000_LCD_HEIGHT,
         .panel_te_hz = 60,
+        .panel_id = 0x00009306,
         .audio_route = "sf2000-default-amp",
         .audio_sample_rate_hz = 44100,
         .audio_channels = 2,
@@ -259,6 +261,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .lcd_width = 240,
         .lcd_height = 320,
         .panel_te_hz = 60,
+        .panel_id = 0x00009306,
         .audio_route = "gb300-family-amp",
         .audio_sample_rate_hz = 44100,
         .audio_channels = 2,
@@ -350,6 +353,16 @@ static char *sf2000_machine_audio_period_frames_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_periods_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_periods);
+}
+
+static char *sf2000_machine_panel_id_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->panel_id);
+}
+
+static char *sf2000_machine_panel_te_hz_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->panel_te_hz);
 }
 
 static char *sf2000_machine_audio_i2s_ctrl3c_get(Object *obj, Error **errp)
@@ -4343,9 +4356,9 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     s->panel_x1 = SF2000_LCD_WIDTH - 1;
     s->panel_y1 = SF2000_LCD_HEIGHT - 1;
     sf2000_lcd = s;
-    info_report("sf2000: lcd profile=%s geometry=%ux%u te=%uHz",
-                sf2000_board_profile_name(), s->width, s->height,
-                s->panel_te_hz);
+    info_report("sf2000: lcd profile=%s panel=0x%08x geometry=%ux%u te=%uHz",
+                sf2000_board_profile_name(), profile->panel_id, s->width,
+                s->height, s->panel_te_hz);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &sf2000_lcd_ops, s,
                           TYPE_SF2000_LCD, SF2000_LCD_MMIO_SIZE);
@@ -4699,9 +4712,10 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_powered[1] = true;
     sf2000_usb_link_active[0] = false;
     sf2000_usb_link_active[1] = false;
-    info_report("sf2000: board profile=%s audio=%s sr=%u ch=%u period=%u/%u "
-                "usb0=%s usb1=%s hub=%s ports=%u",
+    info_report("sf2000: board profile=%s panel=0x%08x audio=%s sr=%u ch=%u "
+                "period=%u/%u usb0=%s usb1=%s hub=%s ports=%u",
                 sf2000_board_profile_name(),
+                sf2000_board_profile_spec()->panel_id,
                 sf2000_board_profile_spec()->audio_route,
                 sf2000_board_profile_spec()->audio_sample_rate_hz,
                 sf2000_board_profile_spec()->audio_channels,
@@ -4771,6 +4785,10 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_period_frames_get, NULL);
     object_class_property_add_str(oc, "audio-periods",
                                   sf2000_machine_audio_periods_get, NULL);
+    object_class_property_add_str(oc, "panel-id",
+                                  sf2000_machine_panel_id_get, NULL);
+    object_class_property_add_str(oc, "panel-te-hz",
+                                  sf2000_machine_panel_te_hz_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-ctrl3c",
                                   sf2000_machine_audio_i2s_ctrl3c_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-fade90",

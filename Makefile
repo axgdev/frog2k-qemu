@@ -492,7 +492,7 @@ smoke-stock-display: build
 		-d guest_errors,unimp -D build/logs/smoke-stock-display.log \
 	> build/logs/smoke-stock-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-stock-display.console
-	grep -q 'sf2000: board profile=sf2000 audio=sf2000-default-amp sr=44100 ch=2 period=1024/8 usb0=micro-usb usb1=usb-a hub=1d6b:0002 ports=1' build/logs/smoke-stock-display.console
+	grep -q 'sf2000: board profile=sf2000 panel=0x00009306 audio=sf2000-default-amp sr=44100 ch=2 period=1024/8 usb0=micro-usb usb1=usb-a hub=1d6b:0002 ports=1' build/logs/smoke-stock-display.console
 	grep -q 'sf2000: audio setup route=sf2000-default-amp' build/logs/smoke-stock-display.console
 	grep -q 'gma-present .*mode=12' build/logs/smoke-stock-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-stock-display.log
@@ -522,8 +522,8 @@ smoke-gb300-display: build check-gb300-asd
 		-d guest_errors,unimp -D build/logs/smoke-gb300-display.log \
 	> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-gb300-display.console
-	grep -q 'sf2000: board profile=gb300 audio=gb300-family-amp sr=44100 ch=2 period=1024/8 usb0=micro-usb usb1=usb-a hub=1d6b:0002 ports=1' build/logs/smoke-gb300-display.console
-	grep -q 'sf2000: lcd profile=gb300 geometry=240x320' build/logs/smoke-gb300-display.console
+	grep -q 'sf2000: board profile=gb300 panel=0x00009306 audio=gb300-family-amp sr=44100 ch=2 period=1024/8 usb0=micro-usb usb1=usb-a hub=1d6b:0002 ports=1' build/logs/smoke-gb300-display.console
+	grep -q 'sf2000: lcd profile=gb300 panel=0x00009306 geometry=240x320' build/logs/smoke-gb300-display.console
 	grep -q 'uart: L115(board.c):LCD_TYPE_ST7789V_MCU8080' build/logs/smoke-gb300-display.log
 	grep -q 'gma-present .*mode=12' build/logs/smoke-gb300-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-gb300-display.log
@@ -538,6 +538,8 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-channels"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-period-frames"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-periods"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"panel-id"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"panel-te-hz"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-ctrl3c"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-fade90"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-id"}}\n'; \
@@ -556,6 +558,8 @@ smoke-board-contract: build
 	grep -q '"return": "2"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1024"' build/logs/smoke-board-contract.console
 	grep -q '"return": "8"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00009306"' build/logs/smoke-board-contract.console
+	grep -q '"return": "60"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x0000ff41"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x008f0000"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1d6b:0002"' build/logs/smoke-board-contract.console
