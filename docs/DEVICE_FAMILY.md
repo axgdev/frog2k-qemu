@@ -53,10 +53,10 @@ until a board selector is needed. The next modelable board differences are:
   rotated or mirrored init mistakes. QEMU now has an explicit `board-profile`
   selector, and GB300 display tests use `board-profile=gb300` so the rotated
   240x320 geometry comes from board data instead of a hidden firmware quirk.
-  The same profile record now carries the current audio and USB route labels,
-  and the machine exposes them as read-only `audio-route`, `usb0-route`, and
-  `usb1-route` properties so the family-specific wiring is visible in one
-  place.
+  The same profile record now carries the current audio and USB route labels
+  plus the panel TE rate, and the machine exposes them as read-only
+  `audio-route`, `usb0-route`, `usb1-route`, and `panel-te-hz` properties so
+  the family-specific wiring and timing are visible in one place.
 - Input matrix: keep local L23/L24 shift-register scanning separate from the
   GPIO-bitbanged RF bus on L27/L28/L29. GB300-family USB gamepad support should
   be modeled as a separate USB host path, not mixed into the RF receiver.

@@ -216,6 +216,7 @@ typedef struct SF2000BoardProfileSpec {
     const char *name;
     uint32_t lcd_width;
     uint32_t lcd_height;
+    uint32_t panel_te_hz;
     const char *audio_route;
     const char *usb0_route;
     const char *usb1_route;
@@ -226,6 +227,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .name = "sf2000",
         .lcd_width = SF2000_LCD_WIDTH,
         .lcd_height = SF2000_LCD_HEIGHT,
+        .panel_te_hz = 60,
         .audio_route = "sf2000-default-amp",
         .usb0_route = "micro-usb",
         .usb1_route = "usb-a",
@@ -234,6 +236,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .name = "gb300",
         .lcd_width = 240,
         .lcd_height = 320,
+        .panel_te_hz = 60,
         .audio_route = "gb300-family-amp",
         .usb0_route = "micro-usb",
         .usb1_route = "usb-a",
@@ -395,6 +398,7 @@ struct SF2000LCDState {
     uint32_t stride;
     uint32_t format;
     uint32_t control;
+    uint32_t panel_te_hz;
     bool redraw;
 
     uint32_t gpio54;
@@ -1395,20 +1399,24 @@ static void sf2000_gpio_l_vsync_maybe_raise(void)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint32_t isr = 0;
+    uint32_t panel_te_hz = 60;
 
     if (now < sf2000_next_vsync_ns || !sf2000_gpio_l_vsync_enabled()) {
         return;
     }
 
+    if (sf2000_lcd && sf2000_lcd->panel_te_hz) {
+        panel_te_hz = sf2000_lcd->panel_te_hz;
+    }
+
     /*
      * The ST7789V tearing-effect output is routed to PINPAD_L08 and requested
-     * as a rising-edge GPIO interrupt by the stock LCD driver. A 60 Hz edge is
-     * enough to unblock wait-for-vsync users until the panel timing is more
-     * precisely modelled.
+     * as a rising-edge GPIO interrupt by the stock LCD driver. Reuse the board
+     * panel timing if available so wait-for-vsync follows the profile data.
      */
     sf2000_mmio_get32(SF2000_GPIO_L_ISR, &isr);
     sf2000_mmio_set32(SF2000_GPIO_L_ISR, isr | SF2000_GPIO_L08);
-    sf2000_next_vsync_ns = now + NANOSECONDS_PER_SECOND / 60;
+    sf2000_next_vsync_ns = now + NANOSECONDS_PER_SECOND / panel_te_hz;
 }
 
 static bool sf2000_timer_pending(unsigned index)
@@ -4036,6 +4044,9 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     if (!s->stride) {
         s->stride = s->width * 2;
     }
+    if (!s->panel_te_hz) {
+        s->panel_te_hz = profile->panel_te_hz;
+    }
 
     s->as = &address_space_memory;
     s->con = graphic_console_init(dev, 0, &sf2000_lcd_gfx_ops, s);
@@ -4043,8 +4054,9 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     s->panel_x1 = SF2000_LCD_WIDTH - 1;
     s->panel_y1 = SF2000_LCD_HEIGHT - 1;
     sf2000_lcd = s;
-    info_report("sf2000: lcd profile=%s geometry=%ux%u",
-                sf2000_board_profile_name(), s->width, s->height);
+    info_report("sf2000: lcd profile=%s geometry=%ux%u te=%uHz",
+                sf2000_board_profile_name(), s->width, s->height,
+                s->panel_te_hz);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &sf2000_lcd_ops, s,
                           TYPE_SF2000_LCD, SF2000_LCD_MMIO_SIZE);
@@ -4058,6 +4070,7 @@ static const Property sf2000_lcd_properties[] = {
     DEFINE_PROP_UINT32("stride", SF2000LCDState, stride, SF2000_LCD_WIDTH * 2),
     DEFINE_PROP_UINT32("format", SF2000LCDState, format, 0),
     DEFINE_PROP_UINT32("control", SF2000LCDState, control, 0),
+    DEFINE_PROP_UINT32("panel-te-hz", SF2000LCDState, panel_te_hz, 0),
 };
 
 static char *sf2000_machine_board_profile_get(Object *obj, Error **errp)
