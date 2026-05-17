@@ -475,6 +475,7 @@ smoke-stock-display: build
 		-d guest_errors,unimp -D build/logs/smoke-stock-display.log \
 		> build/logs/smoke-stock-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-stock-display.console
+	grep -q 'sf2000: audio setup route=sf2000-default-amp' build/logs/smoke-stock-display.console
 	grep -q 'gma-present .*mode=12' build/logs/smoke-stock-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-stock-display.log
 

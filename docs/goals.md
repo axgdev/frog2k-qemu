@@ -77,7 +77,8 @@ strong oracle:
 - audio and amplifier routing;
 - USB host and gadget behavior;
 - remaining board-specific audio, amplifier, and USB behavior beyond the
-  explicit `board-profile` selector and read-only route properties.
+  explicit `board-profile` selector, route properties, and the observed audio
+  setup write in the stock display smoke.
 - direct snapshot ergonomics if we decide to wrap the current QMP migration
   flow in a shorter, less QMP-specific resume path.
 

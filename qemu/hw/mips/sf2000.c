@@ -525,6 +525,7 @@ static int sf2000_patch_archive_path_enabled_cache = -1;
 static int sf2000_patch_archive_access_enabled_cache = -1;
 static uint32_t sf2000_last_progress_seq;
 static bool sf2000_last_progress_valid;
+static bool sf2000_audio_setup_logged;
 
 typedef struct SF2000KeyMap {
     QKeyCode qcode;
@@ -3295,6 +3296,15 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         }
         if (adc_index == 0 && (value & BIT(8))) {
             sf2000_adc_ctrl[0] &= ~BIT(8);
+        }
+    } else if (full_addr >= SF2000_SND_DAC_BASE &&
+               full_addr < SF2000_SND_DAC_BASE + SF2000_SND_DAC_SIZE) {
+        if (!sf2000_audio_setup_logged) {
+            sf2000_audio_setup_logged = true;
+            info_report("sf2000: audio setup route=%s addr=0x%08" HWADDR_PRIx
+                        " value=0x%08" PRIx64,
+                        sf2000_board_profile_spec()->audio_route,
+                        full_addr, value);
         }
     } else if (sf2000_wdt_decode(full_addr)) {
         unsigned wdt_offset = full_addr & 0xff;
