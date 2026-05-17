@@ -93,6 +93,8 @@ until a board selector is needed. The next modelable board differences are:
   The captured libretro-open return tuple is also exposed as
   `audio-open-returns` so the open-path result that accompanies
   `sf2000_left_only` stays visible in the contract.
+  The captured audio-close return tuple is also exposed as
+  `audio-close-returns` so the close-path result stays visible too.
   The PWM2/backlight reset snapshot is also exposed as `pwm2-backlight` so
   the boot-time backlight defaults stay visible alongside the rest of the
   audio contract.

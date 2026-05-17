@@ -129,6 +129,9 @@ The captured hardware logs show more than a DAC write:
   - the captured libretro-open return tuple (`volume_ret=-1`, `mute_ret=0`,
     `silence_ret=0`, `start_ret=0`, `unmute_ret=0`, `output_ret=0`) that now
     appears as a QMP-visible `audio-open-returns` property;
+  - the captured audio-close return tuple (`mute_ret=-1`, `drop_ret=0`,
+    `free_ret=0`) that now appears as a QMP-visible `audio-close-returns`
+    property;
   - board-side mux state changes around mute/unmute and volume changes;
   - the captured mux-open snapshot (`l22=0 l23=0 l24=0 l25=0 l26=0 l27=0
   l28=0 l29=0 r07=0`) that now appears as a QMP-visible `audio-mux`

@@ -239,6 +239,7 @@ typedef struct SF2000BoardProfileSpec {
     const char *audio_route;
     const char *audio_open_route;
     const char *audio_open_returns;
+    const char *audio_close_returns;
     const char *audio_gate_route;
     uint32_t audio_gate_l0;
     uint32_t audio_gate_l1;
@@ -287,6 +288,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_open_route = "sf2000_left_only",
         .audio_open_returns = "volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 "
                               "unmute_ret=0 output_ret=0",
+        .audio_close_returns = "mute_ret=-1 drop_ret=0 free_ret=0",
         .audio_gate_route = "sf2000_r07",
         .audio_gate_l0 = 0x390004fe,
         .audio_gate_l1 = 0x2b4085b3,
@@ -336,6 +338,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_open_route = "sf2000_left_only",
         .audio_open_returns = "volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 "
                               "unmute_ret=0 output_ret=0",
+        .audio_close_returns = "mute_ret=-1 drop_ret=0 free_ret=0",
         .audio_gate_route = "gb300_l15",
         .audio_gate_l0 = 0x350084fe,
         .audio_gate_l1 = 0x25c085b3,
@@ -450,6 +453,11 @@ static char *sf2000_machine_audio_open_route_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_open_returns_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->audio_open_returns);
+}
+
+static char *sf2000_machine_audio_close_returns_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_close_returns);
 }
 
 static char *sf2000_machine_audio_gate_route_get(Object *obj, Error **errp)
@@ -5702,7 +5710,7 @@ static void sf2000_init(MachineState *machine)
     g_autofree char *gate_live_l = sf2000_machine_audio_gate_l_live_get(NULL, NULL);
     g_autofree char *gate_live_r = sf2000_machine_audio_gate_r_live_get(NULL, NULL);
 
-    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s open_returns=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u "
+    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s open_returns=%s close_returns=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
                 "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u "
                 "storage-reset=%s",
@@ -5714,6 +5722,7 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->audio_route,
                 sf2000_board_profile_spec()->audio_open_route,
                 sf2000_board_profile_spec()->audio_open_returns,
+                sf2000_board_profile_spec()->audio_close_returns,
                 sf2000_audio_output_active() ? "open" : "closed",
                 gate_live_l,
                 gate_live_r,
@@ -5787,6 +5796,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_open_route_get, NULL);
     object_class_property_add_str(oc, "audio-open-returns",
                                   sf2000_machine_audio_open_returns_get, NULL);
+    object_class_property_add_str(oc, "audio-close-returns",
+                                  sf2000_machine_audio_close_returns_get, NULL);
     object_class_property_add_str(oc, "audio-gate-route",
                                   sf2000_machine_audio_gate_route_get, NULL);
     object_class_property_add_str(oc, "audio-gate-l",
