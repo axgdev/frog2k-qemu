@@ -39,7 +39,9 @@ QEMU no-image fallback now self-tests its synthetic writeback path and logs
 `smoke-stock-fatfs-writeback` raw-image smoke exercises the SDIO DMA write
 path and logs `sf2000: raw SD probe DMA writeback selftest ok lba=16 sectors=2`
 against a temporary raw image, so both fallback and attached-image
-writeability are independently proven.
+writeability are independently proven. QEMU also now exposes the stable
+reset-side storage contract as `storage-reset`, which keeps the boot-state
+snapshot visible without implying the guest writeback path is solved.
 
 Concrete QEMU implications:
 

@@ -263,6 +263,7 @@ typedef struct SF2000BoardProfileSpec {
     uint32_t usb_phy1;
     uint32_t usb_phy2;
     uint32_t usb_phy3;
+    const char *storage_reset;
 } SF2000BoardProfileSpec;
 
 static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
@@ -304,6 +305,10 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .usb_phy1 = 0x00060606,
         .usb_phy2 = 0x06060606,
         .usb_phy3 = 0x00060606,
+        .storage_reset = "mode=safe experimental=0 status=okay clock=198000000 "
+                         "bus-width=1 cap-highspeed=0 supports-highspeed=0 "
+                         "uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 "
+                         "broken-cd=1",
     },
     {
         .name = "gb300",
@@ -343,6 +348,10 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .usb_phy1 = 0x00060606,
         .usb_phy2 = 0x06060606,
         .usb_phy3 = 0x00060606,
+        .storage_reset = "mode=safe experimental=0 status=okay clock=198000000 "
+                         "bus-width=1 cap-highspeed=0 supports-highspeed=0 "
+                         "uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 "
+                         "broken-cd=1",
     },
 };
 
@@ -622,6 +631,11 @@ static char *sf2000_machine_usb_phy2_get(Object *obj, Error **errp)
 static char *sf2000_machine_usb_phy3_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy3);
+}
+
+static char *sf2000_machine_storage_reset_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->storage_reset);
 }
 
 static void sf2000_audio_callback(void *opaque, int free)
@@ -5430,7 +5444,8 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_link_state_selftest();
     info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s sr=%u ch=%u "
                 "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
-                "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u",
+                "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s hub=%s ports=%u "
+                "storage-reset=%s",
                 sf2000_board_profile_name(),
                 sf2000_board_profile_spec()->panel_id,
                 sf2000_board_profile_spec()->panel_probe_sig1,
@@ -5456,7 +5471,8 @@ static void sf2000_init(MachineState *machine)
                 sf2000_board_profile_spec()->usb0_route,
                 sf2000_board_profile_spec()->usb1_route,
                 sf2000_board_profile_spec()->usb_root_hub_id,
-                sf2000_board_profile_spec()->usb_root_hub_ports);
+                sf2000_board_profile_spec()->usb_root_hub_ports,
+                sf2000_board_profile_spec()->storage_reset);
 
     sf2000_sdio_blk = blk_by_name("sd0");
     dinfo = sf2000_sdio_blk ? NULL : drive_get(IF_SD, 0, 0);
@@ -5578,6 +5594,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_usb_phy2_get, NULL);
     object_class_property_add_str(oc, "usb-phy3",
                                   sf2000_machine_usb_phy3_get, NULL);
+    object_class_property_add_str(oc, "storage-reset",
+                                  sf2000_machine_storage_reset_get, NULL);
     object_class_property_add_str(oc, "usb0-state",
                                   sf2000_machine_usb0_state_get, NULL);
     object_class_property_add_str(oc, "usb1-state",

@@ -128,6 +128,10 @@ until a board selector is needed. The next modelable board differences are:
 - The captured playback open route is exposed as `audio-open-route` so the
   mono-left libretro-open path can be checked directly from QMP as well as
   from the boot log.
+- The captured storage reset snapshot is exposed as `storage-reset` so the
+  stable `mode=safe` / `bus-width=1` / `no-1v8=1` boot-state contract can be
+  queried directly, while the later runtime `wide20` / `wide25` / `wide37`
+  transitions remain part of the guest-side storage work.
 
 ## Current GB300 Boot Status
 

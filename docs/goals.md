@@ -56,6 +56,7 @@ These targets establish the current baseline for:
 - board-profile, panel identity/timing, and topology metadata through QMP property queries;
 - the generic GPIO-L output latch through QMP so keypad and board-mux writes can be observed directly;
 - the captured platform GPIO init snapshot through QMP so the reset mux state is visible directly;
+- the captured storage reset snapshot through QMP so the stable SDIO boot-state contract is visible directly;
 - the captured audio mux-open latch snapshot through QMP so audio board-state changes stay visible;
 - the captured audio hardware open snapshot through QMP so the backend handshake stays visible;
 - the captured audio open-route snapshot through QMP so the mono-left playback path stays visible;
@@ -92,7 +93,9 @@ strong oracle:
   attached raw media stay writable, but the guest-side direct
   `sf2000-storage-probe` writeback smoke is still blocked before `stor-start`
   in the repeated `epc=0x04c00050` loop, so the mirrored FAT / MMC ioctl path
-  remains unproven;
+  remains unproven. The reset-side storage contract is now queryable as
+  `storage-reset`, but that only proves the boot-state snapshot, not the guest
+  writeback path;
 - audio and amplifier routing;
 - USB host and gadget behavior; the current Linux fastprobe now proves SF2000
   MUSB controller registration and access tracing, but still does not validate
