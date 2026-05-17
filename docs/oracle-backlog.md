@@ -109,6 +109,9 @@ The captured hardware logs show more than a DAC write:
   `0x00000020/0x00000020`);
 - the observed `volume=75` / `gain=8` playback settings that accompany the
   audio-open path;
+- the observed mute gate that flips between `mute=0` during play and
+  `mute=1` at stop, with the board coming up muted until the DAC/audio path
+  is powered;
 - board-side mux state changes around mute/unmute and volume changes;
 - a fixed 44.1 kHz, mono-left, 1024-frame, 8-period playback contract;
 - PWM/backlight activity that travels alongside the audio probe.

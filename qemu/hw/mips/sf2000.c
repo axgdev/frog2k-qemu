@@ -353,6 +353,18 @@ static uint32_t sf2000_audio_wave_step;
 static uint32_t sf2000_audio_volume;
 static uint32_t sf2000_audio_gain;
 
+static bool sf2000_audio_output_active(void)
+{
+    return sf2000_audio_powered && sf2000_audio_i2s_fade90 != 0;
+}
+
+static void sf2000_audio_set_backend_active(void)
+{
+    if (sf2000_audio_voice) {
+        AUD_set_active_out(sf2000_audio_voice, sf2000_audio_output_active());
+    }
+}
+
 static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
 {
     return g_strdup(sf2000_board_profile_spec()->audio_route);
@@ -385,6 +397,11 @@ static char *sf2000_machine_audio_volume_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_gain_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("%u", sf2000_audio_gain);
+}
+
+static char *sf2000_machine_audio_muted_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_audio_output_active() ? "false" : "true");
 }
 
 static char *sf2000_machine_audio_power_get(Object *obj, Error **errp)
@@ -538,7 +555,7 @@ static void sf2000_audio_callback(void *opaque, int free)
 
     (void)opaque;
 
-    if (!sf2000_audio_voice || !sf2000_audio_powered) {
+    if (!sf2000_audio_voice || !sf2000_audio_output_active()) {
         return;
     }
 
@@ -634,7 +651,7 @@ static void sf2000_audio_backend_init(MachineState *machine)
                 sf2000_board_profile_spec()->audio_channels,
                 sf2000_board_profile_spec()->audio_period_frames,
                 sf2000_board_profile_spec()->audio_periods);
-    AUD_set_active_out(sf2000_audio_voice, sf2000_audio_powered);
+    sf2000_audio_set_backend_active();
 }
 
 typedef struct SF2000RegDefault {
@@ -4095,7 +4112,7 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             if (sf2000_audio_powered) {
                 sf2000_audio_wave_phase = 0;
             }
-            AUD_set_active_out(sf2000_audio_voice, sf2000_audio_powered);
+            sf2000_audio_set_backend_active();
         }
         if (!sf2000_audio_setup_logged) {
             sf2000_audio_setup_logged = true;
@@ -4108,6 +4125,7 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_audio_i2s_ctrl3c = value;
     } else if (full_addr == SF2000_AUDIO_I2S_FADE90) {
         sf2000_audio_i2s_fade90 = value;
+        sf2000_audio_set_backend_active();
     } else if (sf2000_wdt_decode(full_addr)) {
         unsigned wdt_offset = full_addr & 0xff;
 
@@ -5248,6 +5266,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_volume_get, NULL);
     object_class_property_add_str(oc, "audio-gain",
                                   sf2000_machine_audio_gain_get, NULL);
+    object_class_property_add_str(oc, "audio-muted",
+                                  sf2000_machine_audio_muted_get, NULL);
     object_class_property_add_str(oc, "audio-power",
                                   sf2000_machine_audio_power_get, NULL);
     object_class_property_add_str(oc, "audio-backend-ready",

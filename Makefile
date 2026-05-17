@@ -540,6 +540,7 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gate-r"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-volume"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gain"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-muted"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-backend-ready"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-sample-rate"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-channels"}}\n'; \
@@ -571,6 +572,7 @@ smoke-board-contract: build
 	grep -q '"return": "0x000000a0/0x00000080"' build/logs/smoke-board-contract.console
 	grep -q '"return": "75"' build/logs/smoke-board-contract.console
 	grep -q '"return": "8"' build/logs/smoke-board-contract.console
+	grep -q '"return": "true"' build/logs/smoke-board-contract.console
 	grep -q '"return": "true"' build/logs/smoke-board-contract.console
 	grep -q '"return": "44100"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1"' build/logs/smoke-board-contract.console
