@@ -59,7 +59,9 @@ The next work should focus on the pieces that still prevent QEMU from being a
 strong oracle:
 
 - higher-fidelity display timing and any remaining panel-status corner cases
-  beyond the synthesized panel-ID readback;
+  beyond the synthesized panel-ID readback; the current Linux panel smoke is
+  still blocked before `sf2000-screen: main entry` by a repeated
+  `epc=0x047c0050` TLB fault loop;
 - writable storage semantics, including mirrored FAT updates and MMC ioctl
   write paths;
 - audio and amplifier routing;

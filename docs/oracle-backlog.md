@@ -42,6 +42,12 @@ Keep panel-ID and MADCTL behavior visible enough to catch mirrored/rotated
 init mistakes. QEMU now synthesizes the panel-ID readback path directly;
 remaining work is the timing/readout edge cases around it.
 
+Current verification status: the Linux panel smoke still reaches the
+`/init` handoff and the flat-loader thread start, but it does not reach
+`sf2000-screen: main entry`. The log is currently stuck in a repeated TLB
+exception loop with `epc=0x047c0050`, so the display probe remains
+provisional until the userspace body is observable.
+
 ## Priority 3: USB Host/Device Topology
 
 The hardware-probe history shows initialized root hubs without downstream
