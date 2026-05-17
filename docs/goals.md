@@ -58,7 +58,6 @@ These targets establish the current baseline for:
 The next work should focus on the pieces that still prevent QEMU from being a
 strong oracle:
 
-- higher-fidelity display timing and panel readback;
 - higher-fidelity display timing and any remaining panel-status corner cases
   beyond the synthesized panel-ID readback;
 - writable storage semantics, including mirrored FAT updates and MMC ioctl
