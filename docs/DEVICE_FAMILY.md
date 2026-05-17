@@ -64,8 +64,9 @@ until a board selector is needed. The next modelable board differences are:
   routing. The explicit board profile now carries the route labels and exposes
   them as machine properties, and the stock display smoke now observes the
   startup DAC write as `sf2000: audio setup route=...`. The emulator also
-  exposes the current `audio-power` state as a read-only machine property, but
-  it still needs real audio behavior before this becomes a functional model.
+  exposes the current `audio-power` state and first `audio-dac-value` as
+  read-only machine properties, but it still needs real audio behavior before
+  this becomes a functional model.
 - Firmware images: SF2000 stock uses
   `/root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd`; GB300 stock
   firmware is available at
