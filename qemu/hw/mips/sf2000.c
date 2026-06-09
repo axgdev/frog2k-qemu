@@ -429,6 +429,7 @@ static uint8_t sf2000_i2c_data[2];
 static uint32_t sf2000_pwm_clk_ctrl;
 static SF2000PWMChannel sf2000_pwm_channel[SF2000_PWM_CHANNELS];
 static uint32_t sf2000_usb_regs[2][SF2000_USB_REG_COUNT];
+static bool sf2000_usb_access_reported[2];
 static uint8_t sf2000_irc_fifo_cfg;
 static uint8_t sf2000_irc_ier;
 static uint8_t sf2000_irc_isr;
@@ -456,6 +457,7 @@ static bool sf2000_stock_archive_path_patched;
 static bool sf2000_stock_archive_access_patched;
 static uint32_t sf2000_last_progress_seq;
 static bool sf2000_last_progress_valid;
+static uint32_t sf2000_last_tlb_pc;
 
 typedef struct SF2000KeyMap {
     QKeyCode qcode;
@@ -529,6 +531,8 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
     { 0x047c0050, 0x047c00c0, "storage_probe_entry" },
     { 0x047ca560, 0x047caf00, "storage_probe_main" },
     { 0x047a0050, 0x047d0000, "storage_probe" },
+    { 0x047c0050, 0x047c0400, "panel_rdinit_launcher" },
+    { 0x04c00050, 0x04c20000, "panel_init" },
 };
 
 #define SF2000_PROGRESS_PHYS      0x013f0000ULL
@@ -683,6 +687,44 @@ static void sf2000_trace_fw_call(uint32_t pc, MIPSCPU *cpu)
     }
 }
 
+static void sf2000_trace_entry_bytes(const char *name, uint32_t pc)
+{
+    uint8_t bytes[8];
+    MemTxResult res;
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(bytes); i++) {
+        bytes[i] = address_space_ldub(&address_space_memory, pc + i,
+                                      MEMTXATTRS_UNSPECIFIED, &res);
+        if (res != MEMTX_OK) {
+            return;
+        }
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: entry-bytes %s pc=0x%08x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                  name, pc,
+                  bytes[0], bytes[1], bytes[2], bytes[3],
+                  bytes[4], bytes[5], bytes[6], bytes[7]);
+}
+
+static void sf2000_trace_fault_epc_bytes(MIPSCPU *cpu)
+{
+    uint32_t epc = (uint32_t)cpu->env.CP0_EPC;
+    unsigned i;
+
+    for (i = 0; i < ARRAY_SIZE(sf2000_pc_landmarks); i++) {
+        const SF2000PCLandmark *landmark = &sf2000_pc_landmarks[i];
+
+        if (epc >= landmark->start && epc < landmark->end &&
+            (!strcmp(landmark->name, "storage_probe_entry") ||
+             !strcmp(landmark->name, "panel_rdinit_launcher"))) {
+            sf2000_trace_entry_bytes(landmark->name, epc);
+            return;
+        }
+    }
+}
+
 static void sf2000_trace_pc_landmark(void)
 {
     CPUState *cs = first_cpu;
@@ -698,11 +740,42 @@ static void sf2000_trace_pc_landmark(void)
     cpu = MIPS_CPU(cs);
     pc = (uint32_t)cpu->env.active_tc.PC;
     sf2000_trace_fw_call(pc, cpu);
+    if (pc >= 0x806143b4U && pc < 0x80614460U &&
+        sf2000_last_tlb_pc != pc) {
+        if (stderr_trace) {
+            fprintf(stderr,
+                    "sf2000: tlb-state pc=0x%08x epc=0x%08x badvaddr=0x%08x cause=0x%08x status=0x%08x entryhi=0x%08x ra=0x%08x sp=0x%08x\n",
+                    pc, (uint32_t)cpu->env.CP0_EPC,
+                    (uint32_t)cpu->env.CP0_BadVAddr,
+                    (uint32_t)cpu->env.CP0_Cause,
+                    (uint32_t)cpu->env.CP0_Status,
+                    (uint32_t)cpu->env.CP0_EntryHi,
+                    (uint32_t)cpu->env.active_tc.gpr[31],
+                    (uint32_t)cpu->env.active_tc.gpr[29]);
+        }
+        if (stderr_trace) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: tlb-state pc=0x%08x epc=0x%08x badvaddr=0x%08x cause=0x%08x status=0x%08x entryhi=0x%08x ra=0x%08x sp=0x%08x\n",
+                          pc, (uint32_t)cpu->env.CP0_EPC,
+                          (uint32_t)cpu->env.CP0_BadVAddr,
+                          (uint32_t)cpu->env.CP0_Cause,
+                          (uint32_t)cpu->env.CP0_Status,
+                          (uint32_t)cpu->env.CP0_EntryHi,
+                          (uint32_t)cpu->env.active_tc.gpr[31],
+                          (uint32_t)cpu->env.active_tc.gpr[29]);
+        }
+        sf2000_trace_fault_epc_bytes(cpu);
+        sf2000_last_tlb_pc = pc;
+    }
     for (i = 0; i < ARRAY_SIZE(sf2000_pc_landmarks); i++) {
         const SF2000PCLandmark *landmark = &sf2000_pc_landmarks[i];
 
         if (pc >= landmark->start && pc < landmark->end) {
             if (sf2000_last_pc_landmark != landmark->name) {
+                if (!strcmp(landmark->name, "storage_probe_entry") ||
+                    !strcmp(landmark->name, "panel_rdinit_launcher")) {
+                    sf2000_trace_entry_bytes(landmark->name, pc);
+                }
                 if (stderr_trace) {
                     fprintf(stderr,
                             "sf2000: pc-landmark %s pc=0x%08x ra=0x%08x sp=0x%08x\n",
@@ -1096,6 +1169,12 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
     }
 
     value = sf2000_usb_regs[index][offset >> 2];
+    if (!sf2000_usb_access_reported[index]) {
+        sf2000_usb_access_reported[index] = true;
+        info_report("sf2000: usb%u controller access=read route=%s offset=0x%02x value=0x%08x",
+                    index, index == 0 ? "micro-usb" : "usb-a",
+                    offset, value);
+    }
     /*
      * The HC15xx DTS exposes two MUSB-like host/peripheral controller windows.
      * On the SF2000 DB-B210 board USB0 is routed to the micro USB connector
@@ -1142,6 +1221,12 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
     old = sf2000_usb_regs[index][offset >> 2];
     sf2000_usb_regs[index][offset >> 2] =
         (old & ~(mask << shift)) | (((uint32_t)value & mask) << shift);
+    if (!sf2000_usb_access_reported[index]) {
+        sf2000_usb_access_reported[index] = true;
+        info_report("sf2000: usb%u controller access=write route=%s offset=0x%02x value=0x%08x",
+                    index, index == 0 ? "micro-usb" : "usb-a",
+                    offset, (uint32_t)value);
+    }
 }
 
 static bool sf2000_pwm_decode(hwaddr full_addr, unsigned *channel,
@@ -3072,6 +3157,11 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
                           "sf2000: sdio-reg-read addr=0x%08lx value=0x%08lx size=%u\n",
                           (unsigned long)full_addr, (unsigned long)value, size);
         }
+    } else if (sf2000_trace_sdio() &&
+               full_addr >= 0x1884c000 && full_addr < 0x1884c060) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: sdio-access read addr=0x%08lx size=%u\n",
+                      (unsigned long)full_addr, size);
     } else if (sf2000_ge_decode(full_addr)) {
         uint32_t ge_value;
 
@@ -3329,6 +3419,11 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             qemu_log_mask(LOG_UNIMP, "sf2000: sflash-cmd cmd=0x%02x\n",
                           sf2000_sflash_cmd);
         }
+    } else if (sf2000_trace_sdio() &&
+               full_addr >= 0x1884c000 && full_addr < 0x1884c060) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: sdio-access write addr=0x%08lx value=0x%08lx size=%u\n",
+                      (unsigned long)full_addr, (unsigned long)value, size);
     } else if (full_addr == 0x1884c004) {
         sf2000_sdio_arg = value;
     } else if (full_addr == 0x1884c002) {
