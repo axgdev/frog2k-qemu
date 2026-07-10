@@ -185,6 +185,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_TIMER_CTRL_IEN  BIT(4)
 #define SF2000_TIMER_SEC_COUNT 2
 #define SF2000_TIMER5_INDEX    5
+#define SF2000_TIMER5_MIN_DEADLINE_NS (NANOSECONDS_PER_SECOND / 500)
 #define SF2000_TIMER5_BASE     (SF2000_TIMER_BASE + \
                                 SF2000_TIMER5_INDEX * SF2000_TIMER_STEP)
 #define SF2000_SB_TIMER_BIT    22
@@ -1203,6 +1204,7 @@ static qemu_irq sf2000_eirq3;
 static uint32_t sf2000_timer_cnt[SF2000_TIMER_COUNT];
 static uint32_t sf2000_timer_aim[SF2000_TIMER_COUNT];
 static uint32_t sf2000_timer_ctrl[SF2000_TIMER_COUNT];
+static int64_t sf2000_timer_deadline_ns[SF2000_TIMER_COUNT];
 static int64_t sf2000_next_tick_ns;
 static int64_t sf2000_next_vsync_ns;
 static uint32_t sf2000_irq_enable1;
@@ -1276,6 +1278,8 @@ static int sf2000_patch_archive_path_enabled_cache = -1;
 static int sf2000_patch_archive_access_enabled_cache = -1;
 static uint32_t sf2000_last_progress_seq;
 static bool sf2000_last_progress_valid;
+static uint32_t sf2000_last_unifrog_trace_count;
+static bool sf2000_last_unifrog_trace_valid;
 static bool sf2000_audio_setup_logged;
 
 typedef struct SF2000KeyMap {
@@ -1373,6 +1377,12 @@ typedef struct SF2000ProgressLog {
     uint32_t reserved[3];
     SF2000ProgressEntry entries[SF2000_PROGRESS_ENTRIES];
 } SF2000ProgressLog;
+
+#define SF2000_UNIFROG_TRACE_PHYS    0x07fff780ULL
+#define SF2000_UNIFROG_TRACE_MAGIC   0x55464254U
+#define SF2000_UNIFROG_TRACE_VERSION 1U
+#define SF2000_UNIFROG_TRACE_ENTRIES 64U
+#define SF2000_UNIFROG_TRACE_SIZE    24U
 
 static hwaddr sf2000_guest_phys_addr(uint32_t vaddr)
 {
@@ -1654,6 +1664,89 @@ static void sf2000_trace_progress_log(void)
 
     sf2000_last_progress_seq = seq;
     sf2000_last_progress_valid = true;
+}
+
+static const char *sf2000_unifrog_trace_name(uint32_t event)
+{
+    switch (event) {
+    case 100: return "unifrog.main.start";
+    case 101: return "unifrog.app_main.start";
+    case 102: return "unifrog.module_init.begin";
+    case 103: return "unifrog.module_init.done";
+    case 104: return "unifrog.frontend_thread.start";
+    case 105: return "unifrog.board_init.begin";
+    case 106: return "unifrog.board_init.done";
+    case 107: return "unifrog.storage.done";
+    case 108: return "unifrog.log_reset.done";
+    case 109: return "unifrog.js.begin";
+    case 110: return "unifrog.fb_open.begin";
+    case 111: return "unifrog.fb_clear.done";
+    case 112: return "unifrog.boot_logo.done";
+    case 200: return "sdk.pwm.probe_begin";
+    case 202: return "sdk.pwm.register_done";
+    case 210: return "sdk.backlight.probe_begin";
+    case 211: return "sdk.backlight.default_off";
+    case 220: return "sdk.lcd.probe_begin";
+    case 221: return "sdk.lcd.display_begin";
+    case 222: return "sdk.lcd.reset.done";
+    case 223: return "sdk.lcd.panel_probe.done";
+    case 224: return "sdk.lcd.init_sequence.done";
+    case 225: return "sdk.lcd.display_on";
+    case 226: return "sdk.lcd.rgb_on";
+    case 240: return "sdk.fb.probe_begin";
+    case 241: return "sdk.fb.alloc.done";
+    case 242: return "sdk.fb.register.done";
+    case 243: return "sdk.fb.gma.off";
+    default: return "unknown";
+    }
+}
+
+static void sf2000_trace_unifrog_log(void)
+{
+    hwaddr base = SF2000_UNIFROG_TRACE_PHYS;
+    uint32_t magic;
+    uint32_t version;
+    uint32_t count;
+    uint32_t i;
+
+    if (!sf2000_progress_read_u32(base, &magic) ||
+        magic != SF2000_UNIFROG_TRACE_MAGIC ||
+        !sf2000_progress_read_u32(base + 4, &version) ||
+        version != SF2000_UNIFROG_TRACE_VERSION ||
+        !sf2000_progress_read_u32(base + 8, &count)) {
+        sf2000_last_unifrog_trace_valid = false;
+        return;
+    }
+    count = MIN(count, (uint32_t)SF2000_UNIFROG_TRACE_ENTRIES);
+    if (!sf2000_last_unifrog_trace_valid ||
+        count < sf2000_last_unifrog_trace_count) {
+        sf2000_last_unifrog_trace_count = 0;
+    }
+
+    for (i = sf2000_last_unifrog_trace_count; i < count; i++) {
+        hwaddr entry = base + 16 + (hwaddr)i * SF2000_UNIFROG_TRACE_SIZE;
+        uint32_t seq;
+        uint32_t event;
+        uint32_t arg0;
+        uint32_t arg1;
+        uint32_t arg2;
+        uint32_t r05;
+
+        if (!sf2000_progress_read_u32(entry, &seq) ||
+            !sf2000_progress_read_u32(entry + 4, &event) ||
+            !sf2000_progress_read_u32(entry + 8, &arg0) ||
+            !sf2000_progress_read_u32(entry + 12, &arg1) ||
+            !sf2000_progress_read_u32(entry + 16, &arg2) ||
+            !sf2000_progress_read_u32(entry + 20, &r05)) {
+            break;
+        }
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: unifrog-trace seq=%u event=%u name=%s arg0=0x%08x arg1=0x%08x arg2=0x%08x r05=0x%03x\n",
+                      seq, event, sf2000_unifrog_trace_name(event),
+                      arg0, arg1, arg2, r05);
+    }
+    sf2000_last_unifrog_trace_count = i;
+    sf2000_last_unifrog_trace_valid = true;
 }
 
 static uint32_t sf2000_timer_ticks(void)
@@ -2593,6 +2686,12 @@ static bool sf2000_timer_pending(unsigned index)
         return false;
     }
 
+    if (index == SF2000_TIMER5_INDEX &&
+        sf2000_timer_deadline_ns[index]) {
+        return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) >=
+               sf2000_timer_deadline_ns[index];
+    }
+
     /*
      * TIMER0/TIMER1 are second/millisecond timers. Their +0 register is the
      * target seconds value and +4 carries the target milliseconds in bits
@@ -2610,6 +2709,11 @@ static bool sf2000_timer_pending(unsigned index)
         }
 
         return elapsed_ms - target_ms < 0x80000000u;
+    }
+
+    /* TIMER3 is also used as a free-running statistics counter. */
+    if (!sf2000_timer_aim[index]) {
+        return false;
     }
 
     count = sf2000_timer_ticks();
@@ -2720,6 +2824,7 @@ static void sf2000_irq_poll_timer_cb(void *opaque)
         sf2000_trace_pc_landmark();
     }
     sf2000_trace_progress_log();
+    sf2000_trace_unifrog_log();
     if (sf2000_patch_security_enabled()) {
         sf2000_patch_stock_security_check();
     }
@@ -3306,18 +3411,29 @@ static bool sf2000_wdt_decode(hwaddr full_addr)
 static int64_t sf2000_wdt_timeout_ns(void)
 {
     const char *env = g_getenv("SF2000_WDT_TIMEOUT_MS");
-    uint64_t ms = 20000;
+    uint64_t ticks;
 
     if (env && *env) {
         char *end = NULL;
         uint64_t parsed = g_ascii_strtoull(env, &end, 0);
 
         if (end && *end == '\0' && parsed > 0) {
-            ms = parsed;
+            return parsed * SCALE_MS;
         }
     }
 
-    return ms * SCALE_MS;
+    /*
+     * The SDK loads -(usec * 27 / 128).  WDT0 therefore advances at
+     * 27 MHz / 128 until the 32-bit counter wraps.  A zero count is useful
+     * while guests sequence disable/configure writes; retain the historical
+     * 20 second diagnostic window instead of treating it as an instant wrap.
+     */
+    ticks = (uint32_t)(0u - sf2000_wdt_count);
+    if (!ticks) {
+        return 20000LL * SCALE_MS;
+    }
+    return MAX((uint64_t)1,
+               (ticks * 128000u + 26u) / 27u) * SCALE_NS;
 }
 
 static void sf2000_wdt_timer_cb(void *opaque)
@@ -4927,12 +5043,30 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             } else {
                 sf2000_timer_cnt[timer_index] = value - sf2000_timer_ticks();
             }
+            sf2000_timer_deadline_ns[timer_index] = 0;
             break;
         case 4:
             sf2000_timer_aim[timer_index] = value;
+            if (timer_index == SF2000_TIMER5_INDEX) {
+                uint32_t count = sf2000_timer_ticks() +
+                                 sf2000_timer_cnt[timer_index];
+                uint32_t delta = value - count;
+                int64_t delay_ns;
+
+                if (delta >= 0x80000000u) {
+                    delta = 0;
+                }
+                delay_ns = (int64_t)delta * 1000;
+                sf2000_timer_deadline_ns[timer_index] =
+                    qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                    MAX(delay_ns, (int64_t)SF2000_TIMER5_MIN_DEADLINE_NS);
+            }
             break;
         case 8:
             sf2000_timer_ctrl[timer_index] = value & ~SF2000_TIMER_CTRL_INT;
+            if (!(value & SF2000_TIMER_CTRL_EN)) {
+                sf2000_timer_deadline_ns[timer_index] = 0;
+            }
             sf2000_sb_timer_irq_masked = false;
             if (value & SF2000_TIMER_CTRL_INT) {
                 if (timer_index == 0 || timer_index == 1) {
@@ -5011,14 +5145,20 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             sf2000_wdt_conf = value & 0xff;
             if (!sf2000_wdt_conf) {
                 sf2000_wdt_disable();
-            } else if (sf2000_wdt_count >= 0xffff0000u) {
-                qemu_log_mask(LOG_UNIMP,
-                              "sf2000: watchdog reboot requested\n");
-                qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
             } else {
+                if (sf2000_trace_pc_enabled() && current_cpu) {
+                    MIPSCPU *cpu = MIPS_CPU(current_cpu);
+
+                    info_report("sf2000: watchdog armed pc=0x%08x ra=0x%08x count=0x%08x conf=0x%02x timeout_ns=%" PRId64,
+                                (uint32_t)cpu->env.active_tc.PC,
+                                (uint32_t)cpu->env.active_tc.gpr[31],
+                                sf2000_wdt_count, sf2000_wdt_conf,
+                                sf2000_wdt_timeout_ns());
+                }
                 qemu_log_mask(LOG_UNIMP,
-                              "sf2000: watchdog armed conf=0x%02x\n",
-                              sf2000_wdt_conf);
+                              "sf2000: watchdog armed count=0x%08x conf=0x%02x timeout_ns=%" PRId64 "\n",
+                              sf2000_wdt_count, sf2000_wdt_conf,
+                              sf2000_wdt_timeout_ns());
                 sf2000_wdt_arm();
             }
         }
@@ -6005,6 +6145,16 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_callback_pending = false;
     sf2000_sdio_app_cmd = false;
     sf2000_sdio_bus_width = 1;
+    sf2000_last_unifrog_trace_count = 0;
+    sf2000_last_unifrog_trace_valid = false;
+
+    memset(sf2000_timer_cnt, 0, sizeof(sf2000_timer_cnt));
+    memset(sf2000_timer_aim, 0, sizeof(sf2000_timer_aim));
+    memset(sf2000_timer_ctrl, 0, sizeof(sf2000_timer_ctrl));
+    memset(sf2000_timer_deadline_ns, 0,
+           sizeof(sf2000_timer_deadline_ns));
+    sf2000_sb_timer_irq_masked = false;
+    sf2000_timer_ack();
 
     sf2000_audio_dma_base = 0;
     sf2000_audio_dma_bytes = 0;
