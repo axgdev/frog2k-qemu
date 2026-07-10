@@ -21,6 +21,7 @@
 #include "hw/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/error-report.h"
+#include "qemu/audio.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "system/block-backend.h"
@@ -139,12 +140,25 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_WDT_SIZE        0x00000100ULL
 #define SF2000_SYSCLK_EXT_BASE 0x18801000ULL
 #define SF2000_SYSCLK_EXT_SIZE 0x00000100ULL
+#define SF2000_AUDIO_I2S_BASE  0x1880a000ULL
+#define SF2000_AUDIO_I2S_SIZE  0x00000100ULL
+#define SF2000_AUDIO_I2S_CTRL3C (SF2000_AUDIO_I2S_BASE + 0x3c)
+#define SF2000_AUDIO_I2S_FADE90 (SF2000_AUDIO_I2S_BASE + 0x90)
 #define SF2000_SND_DAC_BASE    0x1880b000ULL
 #define SF2000_SND_DAC_SIZE    0x00000100ULL
 #define SF2000_USB0_BASE       0x18844000ULL
 #define SF2000_USB1_BASE       0x18850000ULL
 #define SF2000_USB_SIZE        0x00001000ULL
 #define SF2000_USB_REG_COUNT   (SF2000_USB_SIZE / 4)
+#define SF2000_MUSB_POWER_SOFTCONN 0x40
+#define SF2000_MUSB_POWER_HSENAB   0x20
+#define SF2000_MUSB_DEVCTL_VBUS    0x18
+#define SF2000_MUSB_DEVCTL_HM      0x04
+#define SF2000_MUSB_DEVCTL_SESSION 0x01
+#define SF2000_MUSB_POWER_RESET_READ 0x70
+#define SF2000_MUSB_POWER_OFF_READ    0x20
+#define SF2000_MUSB_DEVCTL_RESET_READ 0x99
+#define SF2000_MUSB_DEVCTL_OFF_READ   0x80
 #define SF2000_DSC_BOOT_BASE   0x18870000ULL
 #define SF2000_DSC_BOOT_SIZE   0x00000010ULL
 #define SF2000_GE_BASE         0x18806000ULL
@@ -202,7 +216,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GPIO_L_DIR      0x18800058ULL
 #define SF2000_GPIO_L_ISR      0x1880005cULL
 #define SF2000_GPIO_L08        BIT(8)
-#define SF2000_GPIO_T_IN       0x18800350ULL
 #define SF2000_GPIO_R_IN       0x188000f0ULL
 #define SF2000_GPIO_R_ISR      0x188000fcULL
 #define SF2000_GPIO_R_POK      BIT(30)
@@ -212,6 +225,746 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_RF_DATA_BIT     27
 #define SF2000_RF_CLK_BIT      28
 #define SF2000_RF_CS_BIT       29
+
+typedef struct SF2000BoardProfileSpec {
+    const char *name;
+    uint32_t lcd_width;
+    uint32_t lcd_height;
+    uint32_t panel_te_hz;
+    uint32_t panel_id;
+    uint32_t panel_probe_sig1;
+    uint32_t panel_probe_sig2;
+    const char *gpio_init;
+    const char *audio_route;
+    const char *audio_open_route;
+    const char *audio_runtime_route;
+    const char *audio_open_returns;
+    const char *audio_close_returns;
+    const char *audio_gate_route;
+    uint32_t audio_gate_l0;
+    uint32_t audio_gate_l1;
+    uint32_t audio_gate_l1_active;
+    uint32_t audio_gate_r0;
+    uint32_t audio_gate_r1;
+    uint32_t audio_gate_r1_active;
+    const char *audio_mux_open;
+    uint32_t audio_hw_backend;
+    uint32_t audio_hw_snd0;
+    uint32_t audio_hw_dac;
+    const char *audio_hw_close;
+    uint32_t audio_volume;
+    uint32_t audio_gain;
+    uint32_t audio_sample_rate_hz;
+    uint32_t audio_channels;
+    uint32_t audio_runtime_channels;
+    uint32_t audio_period_frames;
+    uint32_t audio_periods;
+    const char *usb0_route;
+    const char *usb1_route;
+    const char *usb_root_hub_id;
+    uint32_t usb_root_hub_ports;
+    uint32_t usb_ctl0;
+    uint32_t usb_ctl1;
+    uint32_t usb_phy0;
+    uint32_t usb_phy1;
+    uint32_t usb_phy2;
+    uint32_t usb_phy3;
+    uint32_t usb_utmi380;
+    uint32_t usb_phy384;
+    const char *storage_reset;
+} SF2000BoardProfileSpec;
+
+static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
+    {
+        .name = "sf2000",
+        .lcd_width = SF2000_LCD_WIDTH,
+        .lcd_height = SF2000_LCD_HEIGHT,
+        .panel_te_hz = 60,
+        .panel_id = 0x00858552,
+        .panel_probe_sig1 = 0xf3f3f2f2,
+        .panel_probe_sig2 = 0x00000004,
+        .gpio_init = "l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 "
+                     "mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 "
+                     "mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7",
+        .audio_route = "sf2000-default-amp",
+        .audio_open_route = "sf2000_left_only",
+        .audio_runtime_route = "sf2000_stereo_safe",
+        .audio_open_returns = "volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 "
+                              "unmute_ret=0 output_ret=0",
+        .audio_close_returns = "mute_ret=-1 drop_ret=0 free_ret=0",
+        .audio_gate_route = "sf2000_r07",
+        .audio_gate_l0 = 0x390004fe,
+        .audio_gate_l1 = 0x2b4085b3,
+        .audio_gate_l1_active = 0x2b4085b3,
+        .audio_gate_r0 = 0x000000a0,
+        .audio_gate_r1 = 0x000000a0,
+        .audio_gate_r1_active = 0x000000a0,
+        .audio_mux_open = "l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0",
+        .audio_hw_backend = 2,
+        .audio_hw_snd0 = 0x14fc0082,
+        .audio_hw_dac = 0x4200039e,
+        .audio_hw_close = "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 "
+                          "dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 "
+                          "hw_period=0 hw_periods=0",
+        .audio_volume = 75,
+        .audio_gain = 8,
+        .audio_sample_rate_hz = 32000,
+        .audio_channels = 1,
+        .audio_runtime_channels = 2,
+        .audio_period_frames = 1024,
+        .audio_periods = 8,
+        .usb0_route = "micro-usb",
+        .usb1_route = "usb-a",
+        .usb_root_hub_id = "1d6b:0002",
+        .usb_root_hub_ports = 1,
+        .usb_ctl0 = 0x07000101,
+        .usb_ctl1 = 0x00000002,
+        .usb_phy0 = 0x06060000,
+        .usb_phy1 = 0x00060606,
+        .usb_phy2 = 0x06060606,
+        .usb_phy3 = 0x00060606,
+        .usb_utmi380 = 0x00570740,
+        .usb_phy384 = 0x00000010,
+        .storage_reset = "mode=safe experimental=0 status=okay clock=198000000 "
+                         "bus-width=1 cap-highspeed=0 supports-highspeed=0 "
+                         "uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 "
+                         "broken-cd=1",
+    },
+    {
+        .name = "gb300",
+        .lcd_width = 240,
+        .lcd_height = 320,
+        .panel_te_hz = 60,
+        .panel_id = 0x00009306,
+        .panel_probe_sig1 = 0x00000000,
+        .panel_probe_sig2 = 0x00000005,
+        .gpio_init = "l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 "
+                     "mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 "
+                     "mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7",
+        .audio_route = "gb300-family-amp",
+        .audio_open_route = "sf2000_left_only",
+        .audio_runtime_route = "sf2000_stereo_safe",
+        .audio_open_returns = "volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 "
+                              "unmute_ret=0 output_ret=0",
+        .audio_close_returns = "mute_ret=-1 drop_ret=0 free_ret=0",
+        .audio_gate_route = "gb300_l15",
+        .audio_gate_l0 = 0x350084fe,
+        .audio_gate_l1 = 0x25c085b3,
+        .audio_gate_l1_active = 0x25c005b3,
+        .audio_gate_r0 = 0x00000020,
+        .audio_gate_r1 = 0x00000020,
+        .audio_gate_r1_active = 0x00000020,
+        .audio_mux_open = "l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0",
+        .audio_hw_backend = 2,
+        .audio_hw_snd0 = 0x14fc0082,
+        .audio_hw_dac = 0x4200039e,
+        .audio_hw_close = "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 "
+                          "dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 "
+                          "hw_period=0 hw_periods=0",
+        .audio_volume = 75,
+        .audio_gain = 8,
+        .audio_sample_rate_hz = 32000,
+        .audio_channels = 1,
+        .audio_runtime_channels = 2,
+        .audio_period_frames = 1024,
+        .audio_periods = 8,
+        .usb0_route = "micro-usb",
+        .usb1_route = "usb-a",
+        .usb_root_hub_id = "1d6b:0002",
+        .usb_root_hub_ports = 1,
+        .usb_ctl0 = 0x07000101,
+        .usb_ctl1 = 0x00000002,
+        .usb_phy0 = 0x06060000,
+        .usb_phy1 = 0x00060606,
+        .usb_phy2 = 0x06060606,
+        .usb_phy3 = 0x00060606,
+        .usb_utmi380 = 0x00570740,
+        .usb_phy384 = 0x00000010,
+        .storage_reset = "mode=safe experimental=0 status=okay clock=198000000 "
+                         "bus-width=1 cap-highspeed=0 supports-highspeed=0 "
+                         "uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 "
+                         "broken-cd=1",
+    },
+};
+
+static char *sf2000_board_profile = NULL;
+static bool sf2000_audio_powered;
+static uint32_t sf2000_audio_dac_value;
+static bool sf2000_audio_dac_written;
+static uint32_t sf2000_audio_i2s_ctrl3c;
+static uint32_t sf2000_audio_i2s_fade90;
+static bool sf2000_storage_selftest_raw;
+static bool sf2000_usb_link_powered[2];
+static bool sf2000_usb_link_active[2];
+static uint32_t sf2000_usb_power_reg[2];
+static uint32_t sf2000_usb_devctl_reg[2];
+static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
+static uint32_t sf2000_panel_sample_readback(SF2000LCDState *s,
+                                             uint32_t value);
+
+static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
+{
+    const char *name = sf2000_board_profile ? sf2000_board_profile : "sf2000";
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(sf2000_board_profiles); i++) {
+        if (strcmp(name, sf2000_board_profiles[i].name) == 0) {
+            return &sf2000_board_profiles[i];
+        }
+    }
+
+    return &sf2000_board_profiles[0];
+}
+
+static const char *sf2000_board_profile_name(void)
+{
+    return sf2000_board_profile_spec()->name;
+}
+
+static AudioBackend *sf2000_audio_be;
+static SWVoiceOut *sf2000_audio_voice;
+static bool sf2000_audio_backend_ready;
+static uint32_t sf2000_audio_wave_phase;
+static uint32_t sf2000_audio_wave_step;
+static uint32_t sf2000_audio_volume;
+static uint32_t sf2000_audio_gain;
+
+static bool sf2000_audio_output_active(void)
+{
+    return sf2000_audio_powered && sf2000_audio_i2s_fade90 != 0;
+}
+
+static void sf2000_audio_gate_live_words(const SF2000BoardProfileSpec *profile,
+                                         uint32_t *gate_l1,
+                                         uint32_t *gate_r1)
+{
+    if (sf2000_audio_output_active()) {
+        *gate_l1 = profile->audio_gate_l1_active;
+        *gate_r1 = profile->audio_gate_r1_active;
+    } else {
+        *gate_l1 = profile->audio_gate_l1;
+        *gate_r1 = profile->audio_gate_r1;
+    }
+}
+
+static void sf2000_audio_set_backend_active(void)
+{
+    if (sf2000_audio_voice) {
+        AUD_set_active_out(sf2000_audio_voice, sf2000_audio_output_active());
+    }
+}
+
+static int16_t sf2000_audio_render_sample(void)
+{
+    uint32_t volume = sf2000_audio_volume ? sf2000_audio_volume : 75;
+    uint32_t gain = sf2000_audio_gain ? sf2000_audio_gain : 8;
+    int32_t scaled = 0x0800;
+
+    scaled = (scaled * (int32_t)gain) / 8;
+    scaled = (scaled * (int32_t)volume) / 75;
+    if (scaled > INT16_MAX) {
+        scaled = INT16_MAX;
+    }
+
+    sf2000_audio_wave_phase += sf2000_audio_wave_step;
+    return (sf2000_audio_wave_phase & 0x80000000u) ?
+           -(int16_t)scaled : (int16_t)scaled;
+}
+
+static char *sf2000_machine_audio_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_route);
+}
+
+static char *sf2000_machine_audio_open_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_open_route);
+}
+
+static char *sf2000_machine_audio_runtime_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_runtime_route);
+}
+
+static char *sf2000_machine_audio_open_returns_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_open_returns);
+}
+
+static char *sf2000_machine_audio_close_returns_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_close_returns);
+}
+
+static char *sf2000_machine_audio_gate_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_gate_route);
+}
+
+static char *sf2000_machine_audio_gate_l_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x/0x%08x",
+                           sf2000_board_profile_spec()->audio_gate_l0,
+                           sf2000_board_profile_spec()->audio_gate_l1);
+}
+
+static char *sf2000_machine_audio_gate_r_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x/0x%08x",
+                           sf2000_board_profile_spec()->audio_gate_r0,
+                           sf2000_board_profile_spec()->audio_gate_r1);
+}
+
+static char *sf2000_machine_audio_gate_l_live_get(Object *obj, Error **errp)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t gate_l1;
+    uint32_t gate_r1;
+
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    return g_strdup_printf("0x%08x/0x%08x",
+                           profile->audio_gate_l0, gate_l1);
+}
+
+static char *sf2000_machine_audio_gate_r_live_get(Object *obj, Error **errp)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t gate_l1;
+    uint32_t gate_r1;
+
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    return g_strdup_printf("0x%08x/0x%08x",
+                           profile->audio_gate_r0, gate_r1);
+}
+
+static char *sf2000_machine_audio_mux_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_mux_open);
+}
+
+static char *sf2000_machine_audio_hw_backend_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_hw_backend);
+}
+
+static char *sf2000_machine_audio_hw_snd0_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->audio_hw_snd0);
+}
+
+static char *sf2000_machine_audio_hw_dac_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->audio_hw_dac);
+}
+
+static char *sf2000_machine_audio_hw_close_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->audio_hw_close);
+}
+
+static char *sf2000_machine_audio_volume_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_audio_volume);
+}
+
+static char *sf2000_machine_audio_gain_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_audio_gain);
+}
+
+static char *sf2000_machine_audio_muted_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_audio_output_active() ? "false" : "true");
+}
+
+static char *sf2000_machine_audio_gate_state_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_audio_output_active() ? "open" : "closed");
+}
+
+static char *sf2000_machine_audio_power_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_audio_powered ? "enabled" : "disabled");
+}
+
+static char *sf2000_machine_audio_backend_ready_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_audio_backend_ready ? "true" : "false");
+}
+
+static char *sf2000_machine_audio_dac_value_get(Object *obj, Error **errp)
+{
+    if (!sf2000_audio_dac_written) {
+        return g_strdup("unset");
+    }
+
+    return g_strdup_printf("0x%08x", sf2000_audio_dac_value);
+}
+
+static char *sf2000_machine_audio_sample_rate_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u",
+                           sf2000_board_profile_spec()->audio_sample_rate_hz);
+}
+
+static char *sf2000_machine_audio_channels_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_channels);
+}
+
+static char *sf2000_machine_audio_runtime_channels_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_runtime_channels);
+}
+
+static char *sf2000_machine_audio_period_frames_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u",
+                           sf2000_board_profile_spec()->audio_period_frames);
+}
+
+static char *sf2000_machine_audio_periods_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->audio_periods);
+}
+
+static char *sf2000_machine_panel_id_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->panel_id);
+}
+
+static char *sf2000_machine_panel_te_hz_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->panel_te_hz);
+}
+
+static char *sf2000_machine_panel_probe_sig1_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->panel_probe_sig1);
+}
+
+static char *sf2000_machine_panel_probe_sig2_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->panel_probe_sig2);
+}
+
+static char *sf2000_machine_gpio_init_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->gpio_init);
+}
+
+static uint32_t sf2000_gpio_l_out;
+static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size);
+
+static char *sf2000_machine_pwm2_backlight_get(Object *obj, Error **errp)
+{
+    uint32_t pwm_clk_ctrl = 0;
+    uint32_t pwm2_lohi = 0;
+    uint32_t pwm2_ctrl = 0;
+
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &pwm_clk_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE, &pwm2_lohi);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, &pwm2_ctrl);
+    return g_strdup_printf("clk=0x%08x lohi=0x%08x ctrl=0x%08x",
+                           pwm_clk_ctrl, pwm2_lohi, pwm2_ctrl);
+}
+
+static bool sf2000_pwm2_backlight_active(void)
+{
+    uint32_t pwm_clk_ctrl = 0;
+    uint32_t pwm2_ctrl = 0;
+
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &pwm_clk_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + 2u * SF2000_PWM_CH_STRIDE + 4u,
+                      &pwm2_ctrl);
+    return (pwm_clk_ctrl & (SF2000_PWM_CLKEN | SF2000_PWM_ENABLE)) ==
+            (SF2000_PWM_CLKEN | SF2000_PWM_ENABLE) &&
+           (pwm2_ctrl & SF2000_PWM_CH_ENABLE);
+}
+
+static char *sf2000_machine_pwm2_backlight_active_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_pwm2_backlight_active() ? "true" : "false");
+}
+
+static char *sf2000_machine_gpio_l_out_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_gpio_l_out);
+}
+
+static char *sf2000_machine_audio_i2s_ctrl3c_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_audio_i2s_ctrl3c);
+}
+
+static char *sf2000_machine_audio_i2s_fade90_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_audio_i2s_fade90);
+}
+
+static bool sf2000_machine_storage_selftest_raw_get(Object *obj, Error **errp)
+{
+    return sf2000_storage_selftest_raw;
+}
+
+static void sf2000_machine_storage_selftest_raw_set(Object *obj, bool value,
+                                                    Error **errp)
+{
+    sf2000_storage_selftest_raw = value;
+}
+
+static char *sf2000_machine_usb0_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->usb0_route);
+}
+
+static char *sf2000_machine_usb1_route_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->usb1_route);
+}
+
+static char *sf2000_machine_usb0_state_get(Object *obj, Error **errp)
+{
+    if (sf2000_usb_link_active[0]) {
+        return g_strdup("session-active");
+    }
+    return g_strdup(sf2000_usb_link_powered[0] ? "powered-disconnected"
+                                               : "disconnected");
+}
+
+static char *sf2000_machine_usb1_state_get(Object *obj, Error **errp)
+{
+    if (sf2000_usb_link_active[1]) {
+        return g_strdup("session-active");
+    }
+    return g_strdup(sf2000_usb_link_powered[1] ? "powered-disconnected"
+                                               : "disconnected");
+}
+
+static char *sf2000_machine_usb0_devctl_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4));
+}
+
+static char *sf2000_machine_usb1_devctl_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4));
+}
+
+static char *sf2000_machine_usb0_power_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB0_BASE + 0x00, 4));
+}
+
+static char *sf2000_machine_usb1_power_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x00, 4));
+}
+
+static char *sf2000_machine_usb0_utmi380_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB0_BASE + 0x380, 4));
+}
+
+static char *sf2000_machine_usb1_utmi380_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x380, 4));
+}
+
+static char *sf2000_machine_usb0_phy384_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB0_BASE + 0x384, 4));
+}
+
+static char *sf2000_machine_usb1_phy384_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x",
+                           (uint32_t)sf2000_usb_read(SF2000_USB1_BASE + 0x384, 4));
+}
+
+static char *sf2000_machine_usb_root_hub_id_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->usb_root_hub_id);
+}
+
+static char *sf2000_machine_usb_root_hub_ports_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("%u", sf2000_board_profile_spec()->usb_root_hub_ports);
+}
+
+static char *sf2000_machine_usb_ctl0_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_ctl0);
+}
+
+static char *sf2000_machine_usb_ctl1_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_ctl1);
+}
+
+static char *sf2000_machine_usb_phy0_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy0);
+}
+
+static char *sf2000_machine_usb_phy1_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy1);
+}
+
+static char *sf2000_machine_usb_phy2_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy2);
+}
+
+static char *sf2000_machine_usb_phy3_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("0x%08x", sf2000_board_profile_spec()->usb_phy3);
+}
+
+static char *sf2000_machine_storage_reset_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_spec()->storage_reset);
+}
+
+static void sf2000_audio_callback(void *opaque, int free)
+{
+    int16_t sample_buf[256 * 2];
+    unsigned channels = sf2000_board_profile_spec()->audio_channels ?
+                        sf2000_board_profile_spec()->audio_channels : 1;
+
+    (void)opaque;
+
+    if (!sf2000_audio_voice || !sf2000_audio_output_active()) {
+        return;
+    }
+
+    while (free > 0) {
+        size_t frames = MIN((size_t)free / (sizeof(int16_t) * channels),
+                            ARRAY_SIZE(sample_buf) / channels);
+        size_t bytes;
+
+        if (!frames) {
+            break;
+        }
+
+        for (size_t i = 0; i < frames; i++) {
+            int16_t sample;
+            sample = sf2000_audio_render_sample();
+
+            sample_buf[i * channels] = sample;
+            if (channels > 1) {
+                for (unsigned ch = 1; ch < channels; ch++) {
+                    sample_buf[i * channels + ch] = sample;
+                }
+            }
+            sf2000_audio_wave_phase += sf2000_audio_wave_step;
+        }
+
+        bytes = AUD_write(sf2000_audio_voice, sample_buf,
+                          frames * sizeof(int16_t) * channels);
+        if (!bytes) {
+            break;
+        }
+        free -= bytes;
+        if (bytes < frames * sizeof(int16_t) * 2) {
+            break;
+        }
+    }
+}
+
+static void sf2000_audio_pcm_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered = sf2000_audio_powered;
+    uint32_t saved_fade = sf2000_audio_i2s_fade90;
+    uint32_t saved_phase = sf2000_audio_wave_phase;
+    int16_t sample0;
+    int16_t sample1;
+
+    sf2000_audio_wave_phase = 0;
+    sample0 = sf2000_audio_render_sample();
+    sf2000_audio_wave_phase = 0x80000000u;
+    sample1 = sf2000_audio_render_sample();
+    if (sample0 != 0x0800 || sample1 != -0x0800) {
+        error_report("sf2000: audio pcm selftest failed board=%s samples=%d/%d",
+                     profile->name, sample0, sample1);
+        goto restore;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio pcm selftest ok board=%s sample0=%d sample1=%d\n",
+                  profile->name, sample0, sample1);
+
+restore:
+    sf2000_audio_wave_phase = saved_phase;
+    sf2000_audio_powered = saved_powered;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+}
+
+static void sf2000_audio_backend_init(MachineState *machine)
+{
+    struct audsettings settings = {
+        .freq = sf2000_board_profile_spec()->audio_sample_rate_hz,
+        .nchannels = sf2000_board_profile_spec()->audio_channels,
+        .fmt = AUDIO_FORMAT_S16,
+        .endianness = 0,
+    };
+    Error *local_err = NULL;
+
+    if (settings.freq == 0 || settings.nchannels == 0) {
+        warn_report("sf2000: audio backend skipped; invalid contract");
+        return;
+    }
+
+    sf2000_audio_wave_step =
+        (uint32_t)(((uint64_t)440 << 32) / settings.freq);
+    sf2000_audio_volume = sf2000_board_profile_spec()->audio_volume;
+    sf2000_audio_gain = sf2000_board_profile_spec()->audio_gain;
+
+    if (machine->audiodev) {
+        sf2000_audio_be = audio_be_by_name(machine->audiodev, &local_err);
+    } else {
+        sf2000_audio_be = audio_get_default_audio_be(&local_err);
+    }
+    if (!sf2000_audio_be) {
+        warn_report("sf2000: audio backend unavailable: %s",
+                    local_err ? error_get_pretty(local_err) : "unknown");
+        if (local_err) {
+            error_free(local_err);
+        }
+        return;
+    }
+
+    sf2000_audio_voice = AUD_open_out(sf2000_audio_be, sf2000_audio_voice,
+                                      "sf2000.audio", NULL,
+                                      sf2000_audio_callback, &settings);
+    if (!sf2000_audio_voice) {
+        warn_report("sf2000: could not open audio voice");
+        return;
+    }
+
+    sf2000_audio_backend_ready = true;
+    info_report("sf2000: audio backend ready route=%s open_route=%s sample_rate=%u channels=%u "
+                "period=%u/%u",
+                sf2000_board_profile_spec()->audio_route,
+                sf2000_board_profile_spec()->audio_open_route,
+                sf2000_board_profile_spec()->audio_sample_rate_hz,
+                sf2000_board_profile_spec()->audio_channels,
+                sf2000_board_profile_spec()->audio_period_frames,
+                sf2000_board_profile_spec()->audio_periods);
+    sf2000_audio_set_backend_active();
+}
 
 typedef struct SF2000RegDefault {
     hwaddr addr;
@@ -263,7 +1016,8 @@ static const SF2000RegDefault sf2000_reg_defaults[] = {
     { 0x188004c0, 0x00000001 }, { 0x188004e4, 0x07000101 },
     { 0x188004e8, 0x00000002 }, { 0x18800500, 0x06060000 },
     { 0x18800504, 0x00060606 }, { 0x18800508, 0x06060606 },
-    { 0x1880050c, 0x00060606 },
+    { 0x1880050c, 0x00060606 }, { 0x1880a03c, 0x0000ff41 },
+    { 0x1880a090, 0x008f0000 },
     { 0x18806000, 0x80020000 }, { 0x18806004, 0x00000000 },
     { 0x18806008, 0x00000000 }, { 0x18806010, 0x00e8c420 },
     { 0x18806020, 0x00000000 }, { 0x18806024, 0x00000000 },
@@ -315,13 +1069,11 @@ struct SF2000LCDState {
     uint32_t stride;
     uint32_t format;
     uint32_t control;
+    uint32_t panel_te_hz;
     bool redraw;
 
     uint32_t gpio54;
     uint32_t gpio354;
-    uint32_t panel_id;
-    bool panel_id_active;
-    unsigned panel_id_step;
     bool panel_wr;
     bool panel_rs;
     uint16_t panel_cmd;
@@ -333,6 +1085,11 @@ struct SF2000LCDState {
     uint16_t panel_y1;
     uint16_t panel_x;
     uint16_t panel_y;
+    uint8_t panel_readback[5];
+    uint8_t panel_readback_len;
+    uint8_t panel_readback_byte;
+    uint8_t panel_readback_bit;
+    bool panel_readback_active;
     uint32_t panel_cmd_count;
     uint32_t panel_pixel_count;
     uint32_t panel_pixels[SF2000_LCD_WIDTH * SF2000_LCD_HEIGHT];
@@ -347,9 +1104,9 @@ static uint32_t sf2000_rgb565_lut[UINT16_MAX + 1u];
 static bool sf2000_rgb565_lut_ready;
 static uint32_t sf2000_rgb565_to_surface(uint16_t pix);
 static void sf2000_gma_present(uint32_t dmba_addr);
-static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
+static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
+                                         bool dump_frame);
 static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
-static uint32_t sf2000_panel_gpio_sample(hwaddr full_addr, uint32_t value);
 
 static uint64_t sf2000_cpu_hz(void)
 {
@@ -416,12 +1173,15 @@ static uint32_t sf2000_sdio_dma_wr_addr;
 static uint32_t sf2000_sdio_dma_wr_len;
 static bool sf2000_sdio_xfer_done;
 static bool sf2000_sdio_xfer_busy;
+static bool sf2000_sdio_write_active;
+static uint8_t sf2000_sdio_pio_state;
 static bool sf2000_sdio_irq_pending;
 static bool sf2000_sdio_callback_pending;
 static bool sf2000_sdio_app_cmd;
 static uint8_t sf2000_sdio_bus_width;
 static bool sf2000_sb_timer_irq_masked;
 static BlockBackend *sf2000_sdio_blk;
+static GHashTable *sf2000_sdio_synth_sectors;
 static char sf2000_uart_line[2][256];
 static uint32_t sf2000_uart_line_len[2];
 static uint8_t sf2000_uart_ier[2];
@@ -440,7 +1200,6 @@ static uint8_t sf2000_irc_ier;
 static uint8_t sf2000_irc_isr;
 static uint32_t sf2000_key_mask;
 static unsigned sf2000_key_shift_index;
-static uint32_t sf2000_gpio_l_out;
 static uint8_t sf2000_rf_regs[256];
 static bool sf2000_rf_cs;
 static bool sf2000_rf_clk;
@@ -460,13 +1219,13 @@ static uint32_t sf2000_last_call_pc;
 static bool sf2000_stock_security_patched;
 static bool sf2000_stock_archive_path_patched;
 static bool sf2000_stock_archive_access_patched;
-static uint32_t sf2000_last_progress_seq;
-static bool sf2000_last_progress_valid;
-static uint32_t sf2000_last_tlb_pc;
 static int sf2000_trace_pc_enabled_cache = -1;
 static int sf2000_patch_security_enabled_cache = -1;
 static int sf2000_patch_archive_path_enabled_cache = -1;
 static int sf2000_patch_archive_access_enabled_cache = -1;
+static uint32_t sf2000_last_progress_seq;
+static bool sf2000_last_progress_valid;
+static bool sf2000_audio_setup_logged;
 
 typedef struct SF2000KeyMap {
     QKeyCode qcode;
@@ -537,11 +1296,7 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
     { 0x8035a794, 0x8035f97c, "run_game" },
     { 0x8035f97c, 0x80365c34, "unwqw_decompress" },
     { 0x80355770, 0x80355b50, "security_check" },
-    { 0x047c0050, 0x047c00c0, "storage_probe_entry" },
-    { 0x047ca560, 0x047caf00, "storage_probe_main" },
-    { 0x047a0050, 0x047d0000, "storage_probe" },
-    { 0x047c0050, 0x047c0400, "panel_rdinit_launcher" },
-    { 0x04c00050, 0x04c20000, "panel_init" },
+    { 0x047c0050, 0x047d0000, "storage_probe" },
 };
 
 #define SF2000_PROGRESS_PHYS      0x013f0000ULL
@@ -567,41 +1322,6 @@ typedef struct SF2000ProgressLog {
     uint32_t reserved[3];
     SF2000ProgressEntry entries[SF2000_PROGRESS_ENTRIES];
 } SF2000ProgressLog;
-
-static void sf2000_trace_progress_log(void);
-
-static MemoryRegion sf2000_progress_region;
-static uint8_t sf2000_progress_shadow[sizeof(SF2000ProgressLog)];
-
-static uint64_t sf2000_progress_region_read(void *opaque, hwaddr addr,
-                                            unsigned size)
-{
-    uint64_t value = 0;
-
-    memcpy(&value, sf2000_progress_shadow + addr, size);
-    return value;
-}
-
-static void sf2000_progress_region_write(void *opaque, hwaddr addr,
-                                         uint64_t value, unsigned size)
-{
-    memcpy(sf2000_progress_shadow + addr, &value, size);
-    sf2000_trace_progress_log();
-}
-
-static const MemoryRegionOps sf2000_progress_region_ops = {
-    .read = sf2000_progress_region_read,
-    .write = sf2000_progress_region_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = {
-        .min_access_size = 1,
-        .max_access_size = 4,
-    },
-    .impl = {
-        .min_access_size = 1,
-        .max_access_size = 4,
-    },
-};
 
 static hwaddr sf2000_guest_phys_addr(uint32_t vaddr)
 {
@@ -729,44 +1449,6 @@ static void sf2000_trace_fw_call(uint32_t pc, MIPSCPU *cpu)
     }
 }
 
-static void sf2000_trace_entry_bytes(const char *name, uint32_t pc)
-{
-    uint8_t bytes[8];
-    MemTxResult res;
-    size_t i;
-
-    for (i = 0; i < ARRAY_SIZE(bytes); i++) {
-        bytes[i] = address_space_ldub(&address_space_memory, pc + i,
-                                      MEMTXATTRS_UNSPECIFIED, &res);
-        if (res != MEMTX_OK) {
-            return;
-        }
-    }
-
-    qemu_log_mask(LOG_UNIMP,
-                  "sf2000: entry-bytes %s pc=0x%08x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                  name, pc,
-                  bytes[0], bytes[1], bytes[2], bytes[3],
-                  bytes[4], bytes[5], bytes[6], bytes[7]);
-}
-
-static void sf2000_trace_fault_epc_bytes(MIPSCPU *cpu)
-{
-    uint32_t epc = (uint32_t)cpu->env.CP0_EPC;
-    unsigned i;
-
-    for (i = 0; i < ARRAY_SIZE(sf2000_pc_landmarks); i++) {
-        const SF2000PCLandmark *landmark = &sf2000_pc_landmarks[i];
-
-        if (epc >= landmark->start && epc < landmark->end &&
-            (!strcmp(landmark->name, "storage_probe_entry") ||
-             !strcmp(landmark->name, "panel_rdinit_launcher"))) {
-            sf2000_trace_entry_bytes(landmark->name, epc);
-            return;
-        }
-    }
-}
-
 static void sf2000_trace_pc_landmark(void)
 {
     CPUState *cs = first_cpu;
@@ -782,42 +1464,11 @@ static void sf2000_trace_pc_landmark(void)
     cpu = MIPS_CPU(cs);
     pc = (uint32_t)cpu->env.active_tc.PC;
     sf2000_trace_fw_call(pc, cpu);
-    if (pc >= 0x806143b4U && pc < 0x80614460U &&
-        sf2000_last_tlb_pc != pc) {
-        if (stderr_trace) {
-            fprintf(stderr,
-                    "sf2000: tlb-state pc=0x%08x epc=0x%08x badvaddr=0x%08x cause=0x%08x status=0x%08x entryhi=0x%08x ra=0x%08x sp=0x%08x\n",
-                    pc, (uint32_t)cpu->env.CP0_EPC,
-                    (uint32_t)cpu->env.CP0_BadVAddr,
-                    (uint32_t)cpu->env.CP0_Cause,
-                    (uint32_t)cpu->env.CP0_Status,
-                    (uint32_t)cpu->env.CP0_EntryHi,
-                    (uint32_t)cpu->env.active_tc.gpr[31],
-                    (uint32_t)cpu->env.active_tc.gpr[29]);
-        }
-        if (stderr_trace) {
-            qemu_log_mask(LOG_UNIMP,
-                          "sf2000: tlb-state pc=0x%08x epc=0x%08x badvaddr=0x%08x cause=0x%08x status=0x%08x entryhi=0x%08x ra=0x%08x sp=0x%08x\n",
-                          pc, (uint32_t)cpu->env.CP0_EPC,
-                          (uint32_t)cpu->env.CP0_BadVAddr,
-                          (uint32_t)cpu->env.CP0_Cause,
-                          (uint32_t)cpu->env.CP0_Status,
-                          (uint32_t)cpu->env.CP0_EntryHi,
-                          (uint32_t)cpu->env.active_tc.gpr[31],
-                          (uint32_t)cpu->env.active_tc.gpr[29]);
-        }
-        sf2000_trace_fault_epc_bytes(cpu);
-        sf2000_last_tlb_pc = pc;
-    }
     for (i = 0; i < ARRAY_SIZE(sf2000_pc_landmarks); i++) {
         const SF2000PCLandmark *landmark = &sf2000_pc_landmarks[i];
 
         if (pc >= landmark->start && pc < landmark->end) {
             if (sf2000_last_pc_landmark != landmark->name) {
-                if (!strcmp(landmark->name, "storage_probe_entry") ||
-                    !strcmp(landmark->name, "panel_rdinit_launcher")) {
-                    sf2000_trace_entry_bytes(landmark->name, pc);
-                }
                 if (stderr_trace) {
                     fprintf(stderr,
                             "sf2000: pc-landmark %s pc=0x%08x ra=0x%08x sp=0x%08x\n",
@@ -1219,6 +1870,8 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
      */
     switch (offset) {
     case 0x00: /* FAddr/Power byte lane. */
+        value = sf2000_usb_power_reg[index];
+        break;
     case 0x02: /* IntrTx */
     case 0x04: /* IntrRx */
     case 0x06: /* IntrTxE */
@@ -1226,7 +1879,11 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
     case 0x0a: /* IntrUSB */
     case 0x0b: /* IntrUSBE */
     case 0x60: /* DevCtl */
-        value = 0;
+        if (offset == 0x60) {
+            value = sf2000_usb_devctl_reg[index];
+        } else {
+            value = sf2000_usb_link_active[index] ? 0x10 : 0;
+        }
         break;
     default:
         break;
@@ -1237,6 +1894,15 @@ static uint64_t sf2000_usb_read(hwaddr full_addr, unsigned size)
         value &= (1u << (size * 8)) - 1u;
     }
     return value;
+}
+
+static const char *sf2000_usb_link_state_name(unsigned index)
+{
+    if (sf2000_usb_link_active[index]) {
+        return "session-active";
+    }
+    return sf2000_usb_link_powered[index] ? "powered-disconnected"
+                                          : "disconnected";
 }
 
 static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
@@ -1254,12 +1920,437 @@ static void sf2000_usb_write(hwaddr full_addr, uint64_t value, unsigned size)
     old = sf2000_usb_regs[index][offset >> 2];
     sf2000_usb_regs[index][offset >> 2] =
         (old & ~(mask << shift)) | (((uint32_t)value & mask) << shift);
+    if (offset == 0x00) {
+        bool powered = value != 0;
+        bool active = (value & SF2000_MUSB_POWER_SOFTCONN) != 0;
+
+        sf2000_usb_link_powered[index] = powered;
+        sf2000_usb_link_active[index] = powered && active;
+        sf2000_usb_power_reg[index] = powered ? (uint32_t)value
+                                              : SF2000_MUSB_POWER_OFF_READ;
+        sf2000_usb_devctl_reg[index] = sf2000_usb_link_active[index] ?
+            0x81 : SF2000_MUSB_DEVCTL_OFF_READ;
+    } else if (offset == 0x60) {
+        bool powered = (value & SF2000_MUSB_DEVCTL_VBUS) != 0;
+        bool active = (value & SF2000_MUSB_DEVCTL_SESSION) != 0;
+
+        sf2000_usb_link_powered[index] = sf2000_usb_link_powered[index] || powered;
+        sf2000_usb_link_active[index] = active;
+        sf2000_usb_devctl_reg[index] = active ? 0x81 : SF2000_MUSB_DEVCTL_OFF_READ;
+    }
     if (!sf2000_usb_access_reported[index]) {
         sf2000_usb_access_reported[index] = true;
         info_report("sf2000: usb%u controller access=write route=%s offset=0x%02x value=0x%08x",
                     index, index == 0 ? "micro-usb" : "usb-a",
                     offset, (uint32_t)value);
     }
+    info_report("sf2000: usb%u state=%s", index, sf2000_usb_link_state_name(index));
+}
+
+static void sf2000_usb_reset_block_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t usb0_power;
+    uint32_t usb0_devctl;
+    uint32_t usb1_power;
+    uint32_t usb1_devctl;
+
+    usb0_power = sf2000_usb_read(SF2000_USB0_BASE + 0x00, 4);
+    usb0_devctl = sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4);
+    usb1_power = sf2000_usb_read(SF2000_USB1_BASE + 0x00, 4);
+    usb1_devctl = sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4);
+
+    if (usb0_power != SF2000_MUSB_POWER_RESET_READ ||
+        usb0_devctl != SF2000_MUSB_DEVCTL_RESET_READ ||
+        usb1_power != SF2000_MUSB_POWER_RESET_READ ||
+        usb1_devctl != SF2000_MUSB_DEVCTL_RESET_READ) {
+        error_report("sf2000: usb reset block selftest failed board=%s "
+                     "usb0=%08x/%08x usb1=%08x/%08x expected=%08x/%08x",
+                     profile->name, usb0_power, usb0_devctl,
+                     usb1_power, usb1_devctl,
+                     SF2000_MUSB_POWER_RESET_READ,
+                     SF2000_MUSB_DEVCTL_RESET_READ);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: usb reset block selftest ok board=%s usb0=0x%08x/0x%08x "
+                  "usb1=0x%08x/0x%08x\n",
+                  profile->name, usb0_power, usb0_devctl,
+                  usb1_power, usb1_devctl);
+}
+
+static void sf2000_usb_link_state_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered[2];
+    bool saved_active[2];
+    uint32_t saved_power_reg[2];
+    uint32_t saved_devctl_reg[2];
+    uint32_t value;
+    unsigned index;
+
+    for (index = 0; index < ARRAY_SIZE(saved_powered); index++) {
+        saved_powered[index] = sf2000_usb_link_powered[index];
+        saved_active[index] = sf2000_usb_link_active[index];
+        saved_power_reg[index] = sf2000_usb_power_reg[index];
+        saved_devctl_reg[index] = sf2000_usb_devctl_reg[index];
+    }
+
+    if (sf2000_usb_read(SF2000_USB0_BASE + 0x00, 4) != SF2000_MUSB_POWER_RESET_READ ||
+        sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_RESET_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x00, 4) != SF2000_MUSB_POWER_RESET_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_RESET_READ) {
+        error_report("sf2000: usb link state selftest failed board=%s reset snapshot mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    sf2000_usb_write(SF2000_USB0_BASE + 0x00, SF2000_MUSB_POWER_OFF_READ, 4);
+    sf2000_usb_write(SF2000_USB1_BASE + 0x00, SF2000_MUSB_POWER_OFF_READ, 4);
+    if (sf2000_usb_read(SF2000_USB0_BASE + 0x00, 4) != SF2000_MUSB_POWER_OFF_READ ||
+        sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_OFF_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x00, 4) != SF2000_MUSB_POWER_OFF_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_OFF_READ ||
+        strcmp(sf2000_usb_link_state_name(0), "disconnected") != 0 ||
+        strcmp(sf2000_usb_link_state_name(1), "disconnected") != 0) {
+        error_report("sf2000: usb link state selftest failed board=%s disconnected snapshot mismatch "
+                     "state0=%s state1=%s",
+                     profile->name,
+                     sf2000_usb_link_state_name(0),
+                     sf2000_usb_link_state_name(1));
+        goto restore;
+    }
+
+    sf2000_usb_write(SF2000_USB0_BASE + 0x60, SF2000_MUSB_DEVCTL_VBUS, 4);
+    sf2000_usb_write(SF2000_USB1_BASE + 0x60, SF2000_MUSB_DEVCTL_VBUS, 4);
+    if (sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_OFF_READ ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4) != SF2000_MUSB_DEVCTL_OFF_READ ||
+        strcmp(sf2000_usb_link_state_name(0), "powered-disconnected") != 0 ||
+        strcmp(sf2000_usb_link_state_name(1), "powered-disconnected") != 0) {
+        error_report("sf2000: usb link state selftest failed board=%s powered->shell "
+                     "state0=%s state1=%s",
+                     profile->name,
+                     sf2000_usb_link_state_name(0),
+                     sf2000_usb_link_state_name(1));
+        goto restore;
+    }
+
+    sf2000_usb_write(SF2000_USB0_BASE + 0x60,
+                     SF2000_MUSB_DEVCTL_VBUS | SF2000_MUSB_DEVCTL_SESSION, 4);
+    sf2000_usb_write(SF2000_USB1_BASE + 0x60,
+                     SF2000_MUSB_DEVCTL_VBUS | SF2000_MUSB_DEVCTL_SESSION, 4);
+    if (sf2000_usb_read(SF2000_USB0_BASE + 0x60, 4) != 0x81 ||
+        sf2000_usb_read(SF2000_USB1_BASE + 0x60, 4) != 0x81) {
+        error_report("sf2000: usb link state selftest failed board=%s session snapshot mismatch",
+                     profile->name);
+        goto restore;
+    }
+    if (strcmp(sf2000_usb_link_state_name(0), "session-active") != 0 ||
+        strcmp(sf2000_usb_link_state_name(1), "session-active") != 0) {
+        error_report("sf2000: usb link state selftest failed board=%s session->active "
+                     "state0=%s state1=%s",
+                     profile->name,
+                     sf2000_usb_link_state_name(0),
+                     sf2000_usb_link_state_name(1));
+        goto restore;
+    }
+
+restore:
+    sf2000_usb_link_powered[0] = saved_powered[0];
+    sf2000_usb_link_powered[1] = saved_powered[1];
+    sf2000_usb_link_active[0] = saved_active[0];
+    sf2000_usb_link_active[1] = saved_active[1];
+    sf2000_usb_power_reg[0] = saved_power_reg[0];
+    sf2000_usb_power_reg[1] = saved_power_reg[1];
+    sf2000_usb_devctl_reg[0] = saved_devctl_reg[0];
+    sf2000_usb_devctl_reg[1] = saved_devctl_reg[1];
+    sf2000_mmio_get32(SF2000_USB0_BASE + 0x00, &value);
+    sf2000_mmio_get32(SF2000_USB1_BASE + 0x00, &value);
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: usb link state selftest ok board=%s\n",
+                  profile->name);
+}
+
+static void sf2000_usb_phy_snapshot_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t usb0_utmi;
+    uint32_t usb0_phy;
+    uint32_t usb1_utmi;
+    uint32_t usb1_phy;
+
+    usb0_utmi = sf2000_usb_read(SF2000_USB0_BASE + 0x380, 4);
+    usb0_phy = sf2000_usb_read(SF2000_USB0_BASE + 0x384, 4);
+    usb1_utmi = sf2000_usb_read(SF2000_USB1_BASE + 0x380, 4);
+    usb1_phy = sf2000_usb_read(SF2000_USB1_BASE + 0x384, 4);
+
+    if (usb0_utmi != profile->usb_utmi380 ||
+        usb0_phy != profile->usb_phy384 ||
+        usb1_utmi != profile->usb_utmi380 ||
+        usb1_phy != profile->usb_phy384) {
+        error_report("sf2000: usb phy snapshot selftest failed board=%s "
+                     "usb0=%08x/%08x usb1=%08x/%08x expected=%08x/%08x",
+                     profile->name, usb0_utmi, usb0_phy, usb1_utmi, usb1_phy,
+                     profile->usb_utmi380, profile->usb_phy384);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: usb phy snapshot selftest ok board=%s "
+                  "usb0=0x%08x/0x%08x usb1=0x%08x/0x%08x\n",
+                  profile->name, usb0_utmi, usb0_phy, usb1_utmi, usb1_phy);
+}
+
+static void sf2000_audio_hw_close_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    g_autofree char *hw_close = sf2000_machine_audio_hw_close_get(NULL, NULL);
+    const char *expected =
+        "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 "
+        "dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 hw_period=0 hw_periods=0";
+
+    if (g_strcmp0(hw_close, expected) != 0) {
+        error_report("sf2000: audio hw close selftest failed board=%s got=%s expected=%s",
+                     profile->name, hw_close ? hw_close : "(null)", expected);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio hw close selftest ok board=%s %s\n",
+                  profile->name, hw_close);
+}
+
+static void sf2000_pwm2_backlight_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    uint32_t pwm_clk_ctrl;
+    uint32_t pwm2_lohi;
+    uint32_t pwm2_ctrl;
+
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &pwm_clk_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE, &pwm2_lohi);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, &pwm2_ctrl);
+    if (pwm_clk_ctrl != 0xc0010000u || pwm2_lohi != 0x05470547u ||
+        pwm2_ctrl != 0x00000090u) {
+        error_report("sf2000: pwm2 backlight selftest failed board=%s "
+                     "clk=0x%08x lohi=0x%08x ctrl=0x%08x expected=0xc0010000/0x05470547/0x00000090",
+                     profile->name, pwm_clk_ctrl, pwm2_lohi, pwm2_ctrl);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: pwm2 backlight selftest ok board=%s clk=0x%08x lohi=0x%08x ctrl=0x%08x\n",
+                  profile->name, pwm_clk_ctrl, pwm2_lohi, pwm2_ctrl);
+}
+
+static void sf2000_pwm2_backlight_blank_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    SF2000LCDState *s = sf2000_lcd;
+    DisplaySurface *surface;
+    uint8_t descriptor[40];
+    uint8_t pixel[2] = { 0xff, 0xff };
+    uint32_t saved_clk_ctrl;
+    uint32_t saved_pwm2_ctrl;
+    uint32_t saved_pixel = 0;
+    uint32_t *dst;
+    const hwaddr desc_addr = 0x00002000ULL;
+    const hwaddr pixel_addr = 0x00003000ULL;
+    uint32_t old;
+
+    if (!s || !s->con) {
+        error_report("sf2000: pwm2 backlight blank selftest failed board=%s no console",
+                     profile->name);
+        return;
+    }
+
+    surface = qemu_console_surface(s->con);
+    if (surface_bits_per_pixel(surface) != 32 ||
+        surface_width(surface) != SF2000_LCD_WIDTH ||
+        surface_height(surface) != SF2000_LCD_HEIGHT) {
+        qemu_console_resize(s->con, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
+        surface = qemu_console_surface(s->con);
+    }
+    if (surface_bits_per_pixel(surface) != 32) {
+        error_report("sf2000: pwm2 backlight blank selftest failed board=%s surface-bpp=%u",
+                     profile->name, surface_bits_per_pixel(surface));
+        return;
+    }
+
+    dst = (uint32_t *)surface_data(surface);
+    saved_pixel = dst[0];
+
+    memset(descriptor, 0, sizeof(descriptor));
+    stl_le_p(descriptor + 0, 0x00000060u); /* RGB565, CLUT off. */
+    stl_le_p(descriptor + 4, 0x00000000u);
+    stl_le_p(descriptor + 8, 0x00000000u);
+    stl_le_p(descriptor + 12, 0x00000000u);
+    stl_le_p(descriptor + 16, 0x00010001u);
+    stl_le_p(descriptor + 20, 0x00020000u);
+    stl_le_p(descriptor + 24, 0x00000000u);
+    stl_le_p(descriptor + 28, (uint32_t)pixel_addr);
+    stl_le_p(descriptor + 32, 0x00000000u);
+    stl_le_p(descriptor + 36, 0x00000000u);
+
+    cpu_physical_memory_write(desc_addr, descriptor, sizeof(descriptor));
+    cpu_physical_memory_write(pixel_addr, pixel, sizeof(pixel));
+
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &saved_clk_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, &saved_pwm2_ctrl);
+    sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL,
+                      saved_clk_ctrl & ~(SF2000_PWM_CLKEN | SF2000_PWM_ENABLE));
+    sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u,
+                      saved_pwm2_ctrl & ~SF2000_PWM_CH_ENABLE);
+
+    if (sf2000_pwm2_backlight_active()) {
+        error_report("sf2000: pwm2 backlight blank selftest failed board=%s backlight still active",
+                     profile->name);
+        goto restore;
+    }
+
+    (void)sf2000_gma_present_block(s, desc_addr, false);
+    old = dst[0];
+    if (old != 0xff000000u) {
+        error_report("sf2000: pwm2 backlight blank selftest failed board=%s pixel=0x%08x",
+                     profile->name, old);
+        goto restore;
+    }
+
+    info_report("sf2000: pwm2 backlight blank selftest ok board=%s sample=0x%08x",
+                profile->name, old);
+
+restore:
+    dst[0] = saved_pixel;
+    dpy_gfx_update(s->con, 0, 0, 1, 1);
+    sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, saved_clk_ctrl);
+    sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, saved_pwm2_ctrl);
+}
+
+static void sf2000_audio_state_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered = sf2000_audio_powered;
+    uint32_t saved_fade = sf2000_audio_i2s_fade90;
+    bool after_power;
+    bool after_fade;
+
+    sf2000_audio_powered = false;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    if (sf2000_audio_output_active()) {
+        error_report("sf2000: audio state selftest failed board=%s reset mute active",
+                     profile->name);
+        goto restore;
+    }
+
+    sf2000_audio_powered = true;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    after_power = sf2000_audio_output_active();
+    sf2000_audio_i2s_fade90 = 0;
+    sf2000_audio_set_backend_active();
+    after_fade = sf2000_audio_output_active();
+    if (!after_power || after_fade) {
+        error_report("sf2000: audio state selftest failed board=%s power=%d fade=%d",
+                     profile->name, after_power, after_fade);
+        goto restore;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio state selftest ok board=%s active=%s mute=%s\n",
+                  profile->name, after_power ? "true" : "false",
+                  after_fade ? "false" : "true");
+
+restore:
+    sf2000_audio_powered = saved_powered;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+}
+
+static void sf2000_audio_gate_live_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered = sf2000_audio_powered;
+    uint32_t saved_fade = sf2000_audio_i2s_fade90;
+    uint32_t gate_l1;
+    uint32_t gate_r1;
+
+    sf2000_audio_powered = false;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    if (gate_l1 != profile->audio_gate_l1 || gate_r1 != profile->audio_gate_r1) {
+        error_report("sf2000: audio gate live selftest failed board=%s reset gate mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    sf2000_audio_powered = true;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    if (gate_l1 != profile->audio_gate_l1_active ||
+        gate_r1 != profile->audio_gate_r1_active) {
+        error_report("sf2000: audio gate live selftest failed board=%s active gate mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio gate live selftest ok board=%s active_l1=0x%08x active_r1=0x%08x\n",
+                  profile->name, profile->audio_gate_l1_active,
+                  profile->audio_gate_r1_active);
+
+restore:
+    sf2000_audio_powered = saved_powered;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+}
+
+static void sf2000_audio_gate_live_variant_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    bool saved_powered = sf2000_audio_powered;
+    uint32_t saved_fade = sf2000_audio_i2s_fade90;
+    uint32_t gate_l1;
+    uint32_t gate_r1;
+
+    sf2000_audio_powered = false;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    if (gate_l1 != profile->audio_gate_l1 || gate_r1 != profile->audio_gate_r1) {
+        error_report("sf2000: audio gate live variant selftest failed board=%s reset mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    sf2000_audio_powered = true;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
+    sf2000_audio_gate_live_words(profile, &gate_l1, &gate_r1);
+    if (gate_l1 != profile->audio_gate_l1_active ||
+        gate_r1 != profile->audio_gate_r1_active) {
+        error_report("sf2000: audio gate live variant selftest failed board=%s active mismatch",
+                     profile->name);
+        goto restore;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio gate live variant selftest ok board=%s reset_l1=0x%08x reset_r1=0x%08x active_l1=0x%08x active_r1=0x%08x\n",
+                  profile->name, profile->audio_gate_l1, profile->audio_gate_r1,
+                  profile->audio_gate_l1_active, profile->audio_gate_r1_active);
+
+restore:
+    sf2000_audio_powered = saved_powered;
+    sf2000_audio_i2s_fade90 = saved_fade;
+    sf2000_audio_set_backend_active();
 }
 
 static bool sf2000_pwm_decode(hwaddr full_addr, unsigned *channel,
@@ -1423,20 +2514,24 @@ static void sf2000_gpio_l_vsync_maybe_raise(void)
 {
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint32_t isr = 0;
+    uint32_t panel_te_hz = 60;
 
     if (now < sf2000_next_vsync_ns || !sf2000_gpio_l_vsync_enabled()) {
         return;
     }
 
+    if (sf2000_lcd && sf2000_lcd->panel_te_hz) {
+        panel_te_hz = sf2000_lcd->panel_te_hz;
+    }
+
     /*
      * The ST7789V tearing-effect output is routed to PINPAD_L08 and requested
-     * as a rising-edge GPIO interrupt by the stock LCD driver. A 60 Hz edge is
-     * enough to unblock wait-for-vsync users until the panel timing is more
-     * precisely modelled.
+     * as a rising-edge GPIO interrupt by the stock LCD driver. Reuse the board
+     * panel timing if available so wait-for-vsync follows the profile data.
      */
     sf2000_mmio_get32(SF2000_GPIO_L_ISR, &isr);
     sf2000_mmio_set32(SF2000_GPIO_L_ISR, isr | SF2000_GPIO_L08);
-    sf2000_next_vsync_ns = now + NANOSECONDS_PER_SECOND / 60;
+    sf2000_next_vsync_ns = now + NANOSECONDS_PER_SECOND / panel_te_hz;
 }
 
 static bool sf2000_timer_pending(unsigned index)
@@ -1717,6 +2812,8 @@ static void sf2000_log_mmio(const char *kind, hwaddr addr, uint64_t value,
          addr < SF2000_SYSCLK_EXT_BASE + SF2000_SYSCLK_EXT_SIZE) ||
         (addr >= SF2000_SND_DAC_BASE &&
          addr < SF2000_SND_DAC_BASE + SF2000_SND_DAC_SIZE) ||
+        (addr >= SF2000_AUDIO_I2S_BASE &&
+         addr < SF2000_AUDIO_I2S_BASE + SF2000_AUDIO_I2S_SIZE) ||
         (addr >= SF2000_DSC_BOOT_BASE &&
          addr < SF2000_DSC_BOOT_BASE + SF2000_DSC_BOOT_SIZE) ||
         (addr >= 0x1884c000 && addr < 0x1884c040 &&
@@ -1728,6 +2825,7 @@ static void sf2000_log_mmio(const char *kind, hwaddr addr, uint64_t value,
         addr == SF2000_GPIO_L_OUT || addr == 0x18800354 ||
         addr == 0x18800058 || addr == 0x18800358 ||
         addr == 0x1880a038 || addr == 0x1880a03a ||
+        addr == SF2000_AUDIO_I2S_CTRL3C || addr == SF2000_AUDIO_I2S_FADE90 ||
         (addr == SF2000_GPIO_L_IN && g_str_equal(kind, "mmio-read")) ||
         (addr == SF2000_GPIO_L_ISR && g_str_equal(kind, "mmio-read")) ||
         (addr == SF2000_GPIO_R_IN && g_str_equal(kind, "mmio-read")) ||
@@ -2156,7 +3254,7 @@ static bool sf2000_wdt_decode(hwaddr full_addr)
 
 static int64_t sf2000_wdt_timeout_ns(void)
 {
-    const char *env = getenv("SF2000_WDT_TIMEOUT_MS");
+    const char *env = g_getenv("SF2000_WDT_TIMEOUT_MS");
     uint64_t ms = 20000;
 
     if (env && *env) {
@@ -2239,6 +3337,10 @@ static uint32_t sf2000_gpio_l_sample(uint32_t value)
                 "sf2000: key-sample pc=0x%08x index=%u mask=0x%08x value=0x%08x\n",
                 (uint32_t)cpu->env.active_tc.PC, index, sf2000_key_mask,
                 value);
+    }
+
+    if (sf2000_lcd) {
+        value = sf2000_panel_sample_readback(sf2000_lcd, value);
     }
 
     return value;
@@ -2469,11 +3571,106 @@ static void sf2000_sdio_fill_sector(uint32_t lba, uint8_t sector[512])
     sector[511] = 0xaa;
 }
 
+static GHashTable *sf2000_sdio_synth_table(void)
+{
+    if (!sf2000_sdio_synth_sectors) {
+        sf2000_sdio_synth_sectors =
+            g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_free);
+    }
+    return sf2000_sdio_synth_sectors;
+}
+
+static bool sf2000_sdio_synth_read_sector(uint32_t lba, uint8_t sector[512])
+{
+    uint8_t *stored;
+
+    if (!sf2000_sdio_synth_sectors) {
+        return false;
+    }
+
+    stored = g_hash_table_lookup(sf2000_sdio_synth_sectors,
+                                 GUINT_TO_POINTER(lba));
+    if (stored) {
+        memcpy(sector, stored, 512);
+        return true;
+    }
+    return false;
+}
+
+static void sf2000_sdio_synth_write_sector(uint32_t lba,
+                                           const uint8_t sector[512])
+{
+    uint8_t *copy;
+
+    copy = g_memdup2(sector, 512);
+    g_hash_table_replace(sf2000_sdio_synth_table(), GUINT_TO_POINTER(lba),
+                         copy);
+}
+
+static void sf2000_sdio_synth_writeback_selftest(void)
+{
+    uint8_t write_sector[512];
+    uint8_t read_sector[512];
+    uint32_t lba = 0xfffffff0u;
+
+    memset(write_sector, 0x5a, sizeof(write_sector));
+    memset(read_sector, 0, sizeof(read_sector));
+    sf2000_sdio_synth_write_sector(lba, write_sector);
+    if (!sf2000_sdio_synth_read_sector(lba, read_sector) ||
+        memcmp(write_sector, read_sector, sizeof(write_sector)) != 0) {
+        error_report("sf2000: synthetic FAT probe writeback selftest failed lba=%u",
+                     lba);
+        return;
+    }
+    info_report("sf2000: synthetic FAT probe writeback selftest ok lba=%u",
+                lba);
+}
+
+static void sf2000_sdio_dma_write(uint32_t lba);
+
+static void sf2000_sdio_raw_writeback_selftest(void)
+{
+    uint8_t write_sector[1024];
+    uint8_t read_sector[1024];
+    uint32_t lba = 0x10;
+    const hwaddr dma_addr = 0x00001000ULL;
+    int ret;
+
+    memset(write_sector, 0x5a, sizeof(write_sector));
+    memset(read_sector, 0, sizeof(read_sector));
+
+    cpu_physical_memory_write(dma_addr, write_sector, sizeof(write_sector));
+    sf2000_sdio_dma_addr = dma_addr;
+    sf2000_sdio_dma_len = sizeof(write_sector);
+    sf2000_sdio_dma_write(lba);
+
+    ret = blk_flush(sf2000_sdio_blk);
+    if (ret < 0) {
+        error_report("sf2000: raw SD probe DMA writeback selftest failed flush lba=%u ret=%d",
+                     lba, ret);
+        return;
+    }
+
+    ret = blk_pread(sf2000_sdio_blk, (int64_t)lba * 512,
+                    sizeof(read_sector), read_sector, 0);
+    if (ret < 0 || memcmp(write_sector, read_sector, sizeof(write_sector)) != 0) {
+        error_report("sf2000: raw SD probe DMA writeback selftest failed verify lba=%u ret=%d",
+                     lba, ret);
+        return;
+    }
+
+    info_report("sf2000: raw SD probe DMA writeback selftest ok lba=%u sectors=2",
+                lba);
+}
+
 static bool sf2000_sdio_read_sector(uint32_t lba, uint8_t sector[512])
 {
     int ret;
 
     if (!sf2000_sdio_blk) {
+        if (sf2000_sdio_synth_read_sector(lba, sector)) {
+            return false;
+        }
         sf2000_sdio_fill_sector(lba, sector);
         return false;
     }
@@ -2493,27 +3690,39 @@ static bool sf2000_sdio_dma_read_image_bulk(uint32_t lba, uint32_t len,
                                             uint32_t *copied,
                                             MemTxResult *result)
 {
-    g_autofree uint8_t *buf = NULL;
+    dma_addr_t map_len = len;
+    void *buf;
     int ret;
 
     if (!sf2000_sdio_blk || !len) {
         return false;
     }
 
-    buf = g_malloc(len);
+    buf = dma_memory_map(&address_space_memory, sf2000_sdio_dma_addr,
+                         &map_len, DMA_DIRECTION_FROM_DEVICE,
+                         MEMTXATTRS_UNSPECIFIED);
+    if (!buf || map_len != len) {
+        if (buf) {
+            dma_memory_unmap(&address_space_memory, buf, map_len,
+                             DMA_DIRECTION_FROM_DEVICE, 0);
+        }
+        return false;
+    }
+
     ret = blk_pread(sf2000_sdio_blk, (int64_t)lba * 512, len, buf, 0);
     if (ret < 0) {
+        dma_memory_unmap(&address_space_memory, buf, map_len,
+                         DMA_DIRECTION_FROM_DEVICE, 0);
         qemu_log_mask(LOG_UNIMP,
                       "sf2000: sdio-read-image-bulk-fallback lba=%u len=%u ret=%d\n",
                       lba, len, ret);
         return false;
     }
 
-    *result = dma_memory_write(&address_space_memory, sf2000_sdio_dma_addr,
-                               buf, len, MEMTXATTRS_UNSPECIFIED);
-    if (*result == MEMTX_OK) {
-        *copied = len;
-    }
+    dma_memory_unmap(&address_space_memory, buf, map_len,
+                     DMA_DIRECTION_FROM_DEVICE, len);
+    *result = MEMTX_OK;
+    *copied = len;
     return true;
 }
 
@@ -2551,6 +3760,8 @@ static void sf2000_sdio_dma_read(uint32_t lba)
 
     sf2000_sdio_xfer_done = true;
     sf2000_sdio_xfer_busy = false;
+    sf2000_sdio_write_active = false;
+    sf2000_sdio_pio_state = 0x04;
     sf2000_sdio_irq_pending = true;
     sf2000_sdio_callback_pending = true;
     /*
@@ -2568,12 +3779,9 @@ static void sf2000_sdio_dma_read(uint32_t lba)
 }
 
 /*
- * The HC15xx controller has separate DMA address/length register pairs per
- * direction: 0x20/0x28 for card-to-memory reads and 0x24/0x2c for
- * memory-to-card writes (confirmed by the unifrog source translation of
- * libmmchosthc15.a, src_set_dma()).  Prefer the write-direction latch when it
- * has been programmed; fall back to the read-direction registers so older
- * guest code that reuses them keeps working.
+ * HC15xx exposes independent DMA address/length pairs: 0x20/0x28 for
+ * card-to-memory and 0x24/0x2c for memory-to-card.  Older firmware sometimes
+ * reuses the read pair, so retain that as a compatibility fallback.
  */
 static uint32_t sf2000_sdio_dma_write_src(void)
 {
@@ -2592,23 +3800,32 @@ static bool sf2000_sdio_dma_write_image_bulk(uint32_t lba, uint32_t len,
                                              MemTxResult *dma_result,
                                              int *blk_result)
 {
-    g_autofree uint8_t *buf = NULL;
+    dma_addr_t map_len = len;
+    void *buf;
 
     if (!sf2000_sdio_blk || !len || (len & 511u)) {
         return false;
     }
 
-    buf = g_malloc(len);
-    *dma_result = dma_memory_read(&address_space_memory,
-                                  sf2000_sdio_dma_write_src(),
-                                  buf, len, MEMTXATTRS_UNSPECIFIED);
-    if (*dma_result != MEMTX_OK) {
-        return true;
+    buf = dma_memory_map(&address_space_memory, sf2000_sdio_dma_write_src(),
+                         &map_len, DMA_DIRECTION_TO_DEVICE,
+                         MEMTXATTRS_UNSPECIFIED);
+    if (!buf || map_len != len) {
+        if (buf) {
+            dma_memory_unmap(&address_space_memory, buf, map_len,
+                             DMA_DIRECTION_TO_DEVICE, 0);
+        }
+        return false;
     }
 
     *blk_result = blk_pwrite(sf2000_sdio_blk, (int64_t)lba * 512, len, buf, 0);
+    dma_memory_unmap(&address_space_memory, buf, map_len,
+                     DMA_DIRECTION_TO_DEVICE, len);
     if (*blk_result >= 0) {
+        *dma_result = MEMTX_OK;
         *copied = len;
+    } else {
+        *dma_result = MEMTX_ERROR;
     }
     return true;
 }
@@ -2618,8 +3835,8 @@ static void sf2000_sdio_dma_write(uint32_t lba)
     uint8_t sector[512];
     MemTxResult dma_result = MEMTX_OK;
     int blk_result = 0;
-    uint32_t prog_len = sf2000_sdio_dma_write_len();
-    uint32_t len = prog_len ? prog_len : 512;
+    uint32_t programmed_len = sf2000_sdio_dma_write_len();
+    uint32_t len = programmed_len ? programmed_len : 512;
     uint32_t copied = 0;
     uint32_t sectors = (len + sizeof(sector) - 1) / sizeof(sector);
     bool image_backed = sf2000_sdio_blk != NULL;
@@ -2649,12 +3866,15 @@ static void sf2000_sdio_dma_write(uint32_t lba)
             if (blk_result < 0) {
                 break;
             }
+        } else {
+            sf2000_sdio_synth_write_sector(lba + i, sector);
         }
         copied += chunk;
     }
 
     sf2000_sdio_xfer_done = true;
     sf2000_sdio_xfer_busy = false;
+    sf2000_sdio_pio_state = 0x04;
     sf2000_sdio_irq_pending = true;
     sf2000_sdio_callback_pending = true;
     if (sf2000_trace_sdio()) {
@@ -2667,7 +3887,7 @@ static void sf2000_sdio_dma_write(uint32_t lba)
 
 static void sf2000_sdio_set_short_response(uint32_t response)
 {
-    /* HC15xx shifts the 32 response bits by one framing byte. */
+    /* HC15xx presents a 32-bit short response after one framing byte. */
     sf2000_sdio_resp[0] = response << 8;
     sf2000_sdio_resp[1] = response >> 24;
 }
@@ -2768,20 +3988,29 @@ static void sf2000_sdio_complete_cmd(void)
     case 16:
         sf2000_sdio_resp[0] = 0;
         break;
-    /* ACMD41 advertises CCS, so data command arguments are sector numbers. */
     case 17:
+        sf2000_sdio_xfer_done = false;
+        sf2000_sdio_xfer_busy = true;
         sf2000_sdio_dma_read(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
     case 18:
+        sf2000_sdio_xfer_done = false;
+        sf2000_sdio_xfer_busy = true;
         sf2000_sdio_dma_read(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
     case 24:
+        sf2000_sdio_xfer_done = false;
+        sf2000_sdio_xfer_busy = true;
+        sf2000_sdio_write_active = true;
         sf2000_sdio_dma_write(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
     case 25:
+        sf2000_sdio_xfer_done = false;
+        sf2000_sdio_xfer_busy = true;
+        sf2000_sdio_write_active = true;
         sf2000_sdio_dma_write(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
@@ -2794,11 +4023,7 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_app_cmd = false;
     }
 
-    /*
-     * Raw bit 6 at 0x30 is the vendor command/data completion indication.
-     * The Linux poll path consumes it directly, while the stock driver
-     * normalizes it in src_get_and_clear_irq().
-     */
+    /* Bit 6 is the HC15xx command/data completion indication. */
     sf2000_sdio_xfer_done = true;
     sf2000_sdio_xfer_busy = false;
     sf2000_sdio_irq_pending = true;
@@ -2838,6 +4063,320 @@ static void sf2000_panel_update_rect(SF2000LCDState *s, uint16_t x, uint16_t y)
     dst = (uint32_t *)(surface_data(surface) + y * surface_stride(surface));
     dst[x] = s->panel_pixels[y * SF2000_LCD_WIDTH + x];
     dpy_gfx_update(s->con, x, y, 1, 1);
+}
+
+static size_t sf2000_panel_fill_readback(const SF2000BoardProfileSpec *profile,
+                                         uint8_t cmd, uint8_t resp[5])
+{
+    size_t len = 0;
+
+    memset(resp, 0, 5);
+
+    switch (profile->panel_id) {
+    case 0x00858552:
+        switch (cmd) {
+        case 0x00:
+            resp[0] = 0xe0;
+            resp[1] = 0xe0;
+            len = 2;
+            break;
+        case 0x04:
+            resp[0] = 0xe4;
+            resp[1] = 0x85;
+            resp[2] = 0x85;
+            resp[3] = 0x52;
+            len = 4;
+            break;
+        case 0x09:
+            resp[0] = 0xe9;
+            resp[1] = 0x00;
+            resp[2] = 0x61;
+            resp[3] = 0x00;
+            resp[4] = 0x00;
+            len = 5;
+            break;
+        case 0x0a:
+            resp[0] = 0xea;
+            resp[1] = 0x08;
+            len = 2;
+            break;
+        case 0x0c:
+            resp[0] = 0xec;
+            resp[1] = 0x06;
+            len = 2;
+            break;
+        case 0xd3:
+            resp[0] = 0xf3;
+            resp[1] = 0xf3;
+            resp[2] = 0xf3;
+            resp[3] = 0xf3;
+            len = 4;
+            break;
+        case 0xda:
+            resp[0] = 0xfa;
+            resp[1] = 0x85;
+            len = 2;
+            break;
+        case 0xdb:
+            resp[0] = 0xfb;
+            resp[1] = 0x85;
+            len = 2;
+            break;
+        case 0xdc:
+            resp[0] = 0xfc;
+            resp[1] = 0x52;
+            len = 2;
+            break;
+        default:
+            break;
+        }
+        break;
+    case 0x00009306:
+        switch (cmd) {
+        case 0x00:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            len = 2;
+            break;
+        case 0x04:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            resp[2] = 0x93;
+            resp[3] = 0x06;
+            len = 4;
+            break;
+        case 0x09:
+            resp[0] = 0x94;
+            resp[1] = 0x94;
+            resp[2] = 0x53;
+            resp[3] = 0x04;
+            resp[4] = 0x00;
+            len = 5;
+            break;
+        case 0x0a:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            len = 2;
+            break;
+        case 0x0c:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            len = 2;
+            break;
+        case 0xd3:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            resp[2] = 0x93;
+            resp[3] = 0x06;
+            len = 4;
+            break;
+        case 0xda:
+            resp[0] = 0x00;
+            resp[1] = 0x00;
+            len = 2;
+            break;
+        case 0xdb:
+            resp[0] = 0x93;
+            resp[1] = 0x93;
+            len = 2;
+            break;
+        case 0xdc:
+            resp[0] = 0x06;
+            resp[1] = 0x06;
+            len = 2;
+            break;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return len;
+}
+
+static bool sf2000_panel_is_readback_cmd(uint8_t cmd)
+{
+    switch (cmd) {
+    case 0x00:
+    case 0x04:
+    case 0x09:
+    case 0x0a:
+    case 0x0c:
+    case 0xd3:
+    case 0xda:
+    case 0xdb:
+    case 0xdc:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void sf2000_panel_prepare_readback(SF2000LCDState *s)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+
+    s->panel_readback_len =
+        sf2000_panel_fill_readback(profile, s->panel_cmd, s->panel_readback);
+    s->panel_readback_byte = 0;
+    s->panel_readback_bit = 0;
+    s->panel_readback_active = s->panel_readback_len > 0;
+}
+
+static uint32_t sf2000_panel_sample_readback(SF2000LCDState *s, uint32_t value)
+{
+    uint8_t bit;
+
+    if (!s->panel_readback_active) {
+        return value;
+    }
+
+    bit = (s->panel_readback[s->panel_readback_byte] >>
+           (7 - s->panel_readback_bit)) & 1u;
+    if (bit) {
+        value |= BIT(SF2000_KEY_DATA_BIT);
+    } else {
+        value &= ~BIT(SF2000_KEY_DATA_BIT);
+    }
+
+    s->panel_readback_bit++;
+    if (s->panel_readback_bit == 8) {
+        s->panel_readback_bit = 0;
+        s->panel_readback_byte++;
+        if (s->panel_readback_byte >= s->panel_readback_len) {
+            s->panel_readback_active = false;
+        }
+    }
+
+    return value;
+}
+
+static void sf2000_panel_readback_selftest(void)
+{
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
+    static const uint8_t commands[] = {
+        0x00, 0x04, 0x09, 0x0a, 0x0c, 0xd3, 0xda, 0xdb, 0xdc,
+    };
+    uint8_t expected[5];
+    uint8_t actual[5];
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(commands); i++) {
+        size_t expected_len;
+        size_t actual_len;
+
+        memset(expected, 0, sizeof(expected));
+        switch (profile->panel_id) {
+        case 0x00858552:
+            switch (commands[i]) {
+            case 0x00:
+                memcpy(expected, (uint8_t[]){ 0xe0, 0xe0 }, 2);
+                expected_len = 2;
+                break;
+            case 0x04:
+                memcpy(expected, (uint8_t[]){ 0xe4, 0x85, 0x85, 0x52 }, 4);
+                expected_len = 4;
+                break;
+            case 0x09:
+                memcpy(expected, (uint8_t[]){ 0xe9, 0x00, 0x61, 0x00, 0x00 }, 5);
+                expected_len = 5;
+                break;
+            case 0x0a:
+                memcpy(expected, (uint8_t[]){ 0xea, 0x08 }, 2);
+                expected_len = 2;
+                break;
+            case 0x0c:
+                memcpy(expected, (uint8_t[]){ 0xec, 0x06 }, 2);
+                expected_len = 2;
+                break;
+            case 0xd3:
+                memcpy(expected, (uint8_t[]){ 0xf3, 0xf3, 0xf3, 0xf3 }, 4);
+                expected_len = 4;
+                break;
+            case 0xda:
+                memcpy(expected, (uint8_t[]){ 0xfa, 0x85 }, 2);
+                expected_len = 2;
+                break;
+            case 0xdb:
+                memcpy(expected, (uint8_t[]){ 0xfb, 0x85 }, 2);
+                expected_len = 2;
+                break;
+            case 0xdc:
+                memcpy(expected, (uint8_t[]){ 0xfc, 0x52 }, 2);
+                expected_len = 2;
+                break;
+            default:
+                expected_len = 0;
+                break;
+            }
+            break;
+        case 0x00009306:
+            switch (commands[i]) {
+            case 0x00:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00 }, 2);
+                expected_len = 2;
+                break;
+            case 0x04:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00, 0x93, 0x06 }, 4);
+                expected_len = 4;
+                break;
+            case 0x09:
+                memcpy(expected, (uint8_t[]){ 0x94, 0x94, 0x53, 0x04, 0x00 }, 5);
+                expected_len = 5;
+                break;
+            case 0x0a:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00 }, 2);
+                expected_len = 2;
+                break;
+            case 0x0c:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00 }, 2);
+                expected_len = 2;
+                break;
+            case 0xd3:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00, 0x93, 0x06 }, 4);
+                expected_len = 4;
+                break;
+            case 0xda:
+                memcpy(expected, (uint8_t[]){ 0x00, 0x00 }, 2);
+                expected_len = 2;
+                break;
+            case 0xdb:
+                memcpy(expected, (uint8_t[]){ 0x93, 0x93 }, 2);
+                expected_len = 2;
+                break;
+            case 0xdc:
+                memcpy(expected, (uint8_t[]){ 0x06, 0x06 }, 2);
+                expected_len = 2;
+                break;
+            default:
+                expected_len = 0;
+                break;
+            }
+            break;
+        default:
+            expected_len = 0;
+            break;
+        }
+
+        actual_len = sf2000_panel_fill_readback(profile, commands[i], actual);
+        if (expected_len != actual_len ||
+            memcmp(expected, actual, expected_len) != 0) {
+            error_report("sf2000: panel readback selftest failed board=%s cmd=0x%02x "
+                         "expected_len=%zu actual_len=%zu expected=%02x:%02x:%02x:%02x:%02x "
+                         "actual=%02x:%02x:%02x:%02x:%02x",
+                         profile->name, commands[i],
+                         expected_len, actual_len,
+                         expected[0], expected[1], expected[2], expected[3], expected[4],
+                         actual[0], actual[1], actual[2], actual[3], actual[4]);
+            return;
+        }
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: panel readback selftest ok board=%s panel=0x%08x\n",
+                  profile->name, profile->panel_id);
 }
 
 static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
@@ -2885,131 +4424,11 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
         } else {
             s->panel_x++;
         }
+        s->panel_readback_active = false;
         break;
     default:
         break;
     }
-}
-
-static uint32_t sf2000_panel_readback_mask(unsigned step)
-{
-    switch (step) {
-    case 0:
-        return BIT(2);
-    case 1:
-        return BIT(3);
-    case 2:
-        return BIT(4);
-    case 3:
-        return BIT(5);
-    case 4:
-        return BIT(6);
-    case 5:
-        return BIT(9);
-    case 6:
-        return BIT(10);
-    case 7:
-        return BIT(11);
-    case 8:
-        return BIT(12);
-    case 9:
-        return BIT(13);
-    case 10:
-        return BIT(14);
-    case 11:
-        return BIT(2);
-    case 12:
-        return BIT(3);
-    case 13:
-        return BIT(4);
-    case 14:
-        return BIT(5);
-    case 15:
-        return BIT(6);
-    default:
-        return 0;
-    }
-}
-
-static uint8_t sf2000_panel_readback_byte(const SF2000LCDState *s,
-                                          unsigned word)
-{
-    switch (word) {
-    case 0:
-        return 0;
-    case 1:
-        return (s->panel_id >> 16) & 0xffu;
-    case 2:
-        return (s->panel_id >> 8) & 0xffu;
-    case 3:
-        return s->panel_id & 0xffu;
-    default:
-        return 0;
-    }
-}
-
-static uint32_t sf2000_gpio_input_value(hwaddr aligned)
-{
-    uint32_t value = 0;
-    unsigned i;
-
-    for (i = 0; i < ARRAY_SIZE(sf2000_regs); i++) {
-        if (sf2000_regs[i].valid && sf2000_regs[i].addr == aligned) {
-            value = sf2000_regs[i].value;
-            break;
-        }
-    }
-    if (i == ARRAY_SIZE(sf2000_regs)) {
-        for (i = 0; i < ARRAY_SIZE(sf2000_reg_defaults); i++) {
-            if (sf2000_reg_defaults[i].addr == aligned) {
-                value = sf2000_reg_defaults[i].value;
-                break;
-            }
-        }
-    }
-    if (!value && aligned == SF2000_GPIO_L_IN) {
-        value = 0x07800102;
-    }
-    return value;
-}
-
-static uint32_t sf2000_panel_gpio_sample(hwaddr full_addr, uint32_t value)
-{
-    SF2000LCDState *s = sf2000_lcd;
-    hwaddr aligned = full_addr & ~3ULL;
-    unsigned step;
-    unsigned word;
-    uint8_t byte;
-    uint32_t mask;
-
-    if (!s || !s->panel_id_active) {
-        return value;
-    }
-
-    step = s->panel_id_step;
-    if (step >= 64) {
-        s->panel_id_active = false;
-        return value;
-    }
-
-    if (aligned != SF2000_GPIO_L_IN && aligned != SF2000_GPIO_T_IN) {
-        return value;
-    }
-
-    word = step / 16u;
-    mask = sf2000_panel_readback_mask(step % 16u);
-    byte = sf2000_panel_readback_byte(s, word);
-    value &= ~mask;
-    if ((step % 16u) < 8u && (byte & BIT(step % 8u))) {
-        value |= mask;
-    }
-
-    s->panel_id_step++;
-    if (s->panel_id_step >= 64) {
-        s->panel_id_active = false;
-    }
-
-    return value;
 }
 
 static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
@@ -3027,15 +4446,6 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
                       "sf2000: panel-cmd cmd=0x%02x raw=0x%04x count=%u\n",
                       s->panel_cmd, value, s->panel_cmd_count);
     }
-    if (s->panel_cmd == 0x04) {
-        s->panel_id_active = true;
-        s->panel_id_step = 0;
-        qemu_log_mask(LOG_UNIMP,
-                      "sf2000: panel-read-id start panel-id=0x%06x\n",
-                      s->panel_id & 0xffffffu);
-    } else {
-        s->panel_id_active = false;
-    }
     if (s->panel_cmd == 0x2c) {
         s->panel_x = s->panel_x0;
         s->panel_y = s->panel_y0;
@@ -3043,6 +4453,19 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
                       "sf2000: panel-ramwr x=%u..%u y=%u..%u pixels=%u\n",
                       s->panel_x0, s->panel_x1, s->panel_y0, s->panel_y1,
                       s->panel_pixel_count);
+        s->panel_readback_active = false;
+    } else if (sf2000_panel_is_readback_cmd(s->panel_cmd)) {
+        sf2000_panel_prepare_readback(s);
+        if (s->panel_readback_len) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: panel-read cmd=0x%02x bytes=%u data=%02x:%02x:%02x:%02x:%02x\n",
+                          s->panel_cmd, s->panel_readback_len,
+                          s->panel_readback[0], s->panel_readback[1],
+                          s->panel_readback[2], s->panel_readback[3],
+                          s->panel_readback[4]);
+        }
+    } else {
+        s->panel_readback_active = false;
     }
 }
 
@@ -3224,14 +4647,16 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         }
     } else if (full_addr == SF2000_IRQ_STATUS2) {
         value = 0;
-    } else if ((full_addr & ~3ULL) == SF2000_GPIO_L_IN ||
-               (full_addr & ~3ULL) == SF2000_GPIO_T_IN) {
-        value = sf2000_gpio_input_value(full_addr & ~3ULL);
-        if ((full_addr & ~3ULL) == SF2000_GPIO_L_IN) {
-            value = sf2000_gpio_l_sample(value);
-            value = sf2000_rf_gpio_l_sample(value);
+    } else if ((full_addr & ~3u) == SF2000_GPIO_L_IN) {
+        value = 0x07800102;
+        for (i = 0; i < ARRAY_SIZE(sf2000_regs); i++) {
+            if (sf2000_regs[i].valid && sf2000_regs[i].addr == SF2000_GPIO_L_IN) {
+                value = sf2000_regs[i].value;
+                break;
+            }
         }
-        value = sf2000_panel_gpio_sample(full_addr, value);
+        value = sf2000_gpio_l_sample(value);
+        value = sf2000_rf_gpio_l_sample(value);
         value >>= ((full_addr & 3u) * 8u);
         if (size < 4) {
             value &= (1u << (size * 8)) - 1u;
@@ -3282,22 +4707,19 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
             value &= (1u << (size * 8)) - 1u;
         }
     } else if (full_addr == 0x1884c001) {
-        value = 0; /* SDIO command engine idle. */
+        /*
+         * Stock sd_m33 helpers poll this byte for the command/data state.
+         * The helper traces show an in-flight 0xa8 family while the controller
+         * is busy and the terminal 0xe4 family once the transfer completes.
+         */
+        value = (sf2000_sdio_xfer_busy || sf2000_sdio_write_active) ? 0xa8 : 0xe4;
+    } else if (full_addr == 0x1884c00e) {
+        value = sf2000_sdio_pio_state;
     } else if (full_addr == 0x1884c00b) {
         value = sf2000_sdio_xfer_done ? 0x0c : 0x09;
     } else if (full_addr == 0x1884c030) {
         value = sf2000_sdio_xfer_done ? 0x6c :
                 (sf2000_sdio_xfer_busy ? 0x21 : 0x20);
-        if (sf2000_trace_sdio()) {
-            qemu_log_mask(LOG_UNIMP,
-                          "sf2000: sdio-reg-read addr=0x%08lx value=0x%08lx size=%u\n",
-                          (unsigned long)full_addr, (unsigned long)value, size);
-        }
-    } else if (sf2000_trace_sdio() &&
-               full_addr >= 0x1884c000 && full_addr < 0x1884c060) {
-        qemu_log_mask(LOG_UNIMP,
-                      "sf2000: sdio-access read addr=0x%08lx size=%u\n",
-                      (unsigned long)full_addr, size);
     } else if (sf2000_ge_decode(full_addr)) {
         uint32_t ge_value;
 
@@ -3485,6 +4907,29 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         if (adc_index == 0 && (value & BIT(8))) {
             sf2000_adc_ctrl[0] &= ~BIT(8);
         }
+    } else if (full_addr >= SF2000_SND_DAC_BASE &&
+               full_addr < SF2000_SND_DAC_BASE + SF2000_SND_DAC_SIZE) {
+        sf2000_audio_powered = value != 0;
+        sf2000_audio_dac_value = value;
+        sf2000_audio_dac_written = true;
+        if (sf2000_audio_voice) {
+            if (sf2000_audio_powered) {
+                sf2000_audio_wave_phase = 0;
+            }
+            sf2000_audio_set_backend_active();
+        }
+        if (!sf2000_audio_setup_logged) {
+            sf2000_audio_setup_logged = true;
+            info_report("sf2000: audio setup route=%s addr=0x%08" HWADDR_PRIx
+                        " value=0x%08" PRIx64,
+                        sf2000_board_profile_spec()->audio_route,
+                        full_addr, value);
+        }
+    } else if (full_addr == SF2000_AUDIO_I2S_CTRL3C) {
+        sf2000_audio_i2s_ctrl3c = value;
+    } else if (full_addr == SF2000_AUDIO_I2S_FADE90) {
+        sf2000_audio_i2s_fade90 = value;
+        sf2000_audio_set_backend_active();
     } else if (sf2000_wdt_decode(full_addr)) {
         unsigned wdt_offset = full_addr & 0xff;
 
@@ -3573,46 +5018,48 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_sdio_arg = value;
     } else if (full_addr == 0x1884c002) {
         sf2000_sdio_cmd = value & 0x3f;
+        if (sf2000_sdio_cmd == 24 || sf2000_sdio_cmd == 25) {
+            sf2000_sdio_write_active = true;
+        }
     } else if (full_addr == 0x1884c020) {
         sf2000_sdio_dma_addr = value;
     } else if (full_addr == 0x1884c024) {
         sf2000_sdio_dma_wr_addr = value;
-    } else if (full_addr == 0x1884c02c) {
-        sf2000_sdio_dma_wr_len = value;
     } else if (full_addr == 0x1884c028) {
         sf2000_sdio_dma_len = value;
-        if (sf2000_trace_sdio()) {
-            qemu_log_mask(LOG_UNIMP,
-                          "sf2000: sdio-reg-write addr=0x%08lx value=0x%08lx size=%u\n",
-                          (unsigned long)full_addr, (unsigned long)value, size);
-        }
+    } else if (full_addr == 0x1884c02c) {
+        sf2000_sdio_dma_wr_len = value;
+    } else if (full_addr == 0x1884c00e) {
+        sf2000_sdio_pio_state = value & 0xff;
     } else if (full_addr == 0x1884c00b && (value & 0x04)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_write_active = false;
         sf2000_sdio_irq_pending = false;
+        sf2000_sdio_pio_state &= ~0x04;
+        sf2000_sdio_pio_state |= 0x01;
+        sf2000_sdio_pio_state &= ~0x01;
     } else if (full_addr == 0x1884c030 && (value & 0x40)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_write_active = false;
         sf2000_sdio_irq_pending = false;
+        sf2000_sdio_pio_state &= ~0x04;
+        sf2000_sdio_pio_state |= 0x01;
+        sf2000_sdio_pio_state &= ~0x01;
     } else if (full_addr == 0x1884c030 && (value & 1)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = true;
+        sf2000_sdio_write_active = true;
+        sf2000_sdio_pio_state = 0x04;
     } else if (full_addr == 0x1884c030 && (value & 0x20)) {
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_write_active = false;
         sf2000_sdio_irq_pending = false;
-        if (sf2000_trace_sdio()) {
-            qemu_log_mask(LOG_UNIMP,
-                          "sf2000: sdio-reg-write addr=0x%08lx value=0x%08lx size=%u\n",
-                          (unsigned long)full_addr, (unsigned long)value, size);
-        }
+        sf2000_sdio_pio_state = 0x04;
     } else if (full_addr == 0x1884c000 && (value & 1)) {
         sf2000_sdio_complete_cmd();
-        if (sf2000_trace_sdio()) {
-            qemu_log_mask(LOG_UNIMP,
-                          "sf2000: sdio-reg-write addr=0x%08lx value=0x%08lx size=%u\n",
-                          (unsigned long)full_addr, (unsigned long)value, size);
-        }
     }
 
     sf2000_update_irq();
@@ -3830,6 +5277,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     uint32_t sample_w, sample_h;
     uint32_t width, height, bpp;
     bool scale_x, scale_y;
+    bool backlight_active;
     int y;
 
     if (!s || !dmba_addr) {
@@ -3945,6 +5393,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         linebuf_alloc = g_malloc(pitch);
         linebuf = linebuf_alloc;
     }
+    backlight_active = sf2000_pwm2_backlight_active();
     for (y = 0; y < height; y++) {
         uint32_t *dst = (uint32_t *)(surface_data(surface) +
                         (sy + y) * surface_stride(surface)) + sx;
@@ -3974,6 +5423,9 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
             } else {
                 uint8_t c = linebuf[src_x];
                 dst[x] = 0xff000000u | (c << 16) | (c << 8) | c;
+            }
+            if (!backlight_active) {
+                dst[x] = 0xff000000u;
             }
         }
     }
@@ -4172,18 +5624,19 @@ static const MemoryRegionOps sf2000_lcd_ops = {
 static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
 {
     SF2000LCDState *s = SF2000_LCD(dev);
+    const SF2000BoardProfileSpec *profile = sf2000_board_profile_spec();
 
-    if (!s->width) {
-        s->width = SF2000_LCD_WIDTH;
+    if (!s->width || s->width == SF2000_LCD_WIDTH) {
+        s->width = profile->lcd_width;
     }
-    if (!s->height) {
-        s->height = SF2000_LCD_HEIGHT;
+    if (!s->height || s->height == SF2000_LCD_HEIGHT) {
+        s->height = profile->lcd_height;
     }
     if (!s->stride) {
         s->stride = s->width * 2;
     }
-    if (!s->panel_id) {
-        s->panel_id = 0x009306u;
+    if (!s->panel_te_hz) {
+        s->panel_te_hz = profile->panel_te_hz;
     }
 
     s->as = &address_space_memory;
@@ -4192,6 +5645,9 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     s->panel_x1 = SF2000_LCD_WIDTH - 1;
     s->panel_y1 = SF2000_LCD_HEIGHT - 1;
     sf2000_lcd = s;
+    info_report("sf2000: lcd profile=%s panel=0x%08x geometry=%ux%u te=%uHz",
+                sf2000_board_profile_name(), profile->panel_id, s->width,
+                s->height, s->panel_te_hz);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &sf2000_lcd_ops, s,
                           TYPE_SF2000_LCD, SF2000_LCD_MMIO_SIZE);
@@ -4205,8 +5661,29 @@ static const Property sf2000_lcd_properties[] = {
     DEFINE_PROP_UINT32("stride", SF2000LCDState, stride, SF2000_LCD_WIDTH * 2),
     DEFINE_PROP_UINT32("format", SF2000LCDState, format, 0),
     DEFINE_PROP_UINT32("control", SF2000LCDState, control, 0),
-    DEFINE_PROP_UINT32("panel-id", SF2000LCDState, panel_id, 0x009306u),
+    DEFINE_PROP_UINT32("panel-te-hz", SF2000LCDState, panel_te_hz, 0),
 };
+
+static char *sf2000_machine_board_profile_get(Object *obj, Error **errp)
+{
+    return g_strdup(sf2000_board_profile_name());
+}
+
+static void sf2000_machine_board_profile_set(Object *obj, const char *value,
+                                             Error **errp)
+{
+    if (!value || !value[0]) {
+        g_free(sf2000_board_profile);
+        sf2000_board_profile = g_strdup("sf2000");
+        return;
+    }
+    if (strcmp(value, "sf2000") != 0 && strcmp(value, "gb300") != 0) {
+        error_setg(errp, "unsupported SF2000 board profile '%s'", value);
+        return;
+    }
+    g_free(sf2000_board_profile);
+    sf2000_board_profile = g_strdup(value);
+}
 
 static void sf2000_lcd_class_init(ObjectClass *klass, const void *data)
 {
@@ -4335,6 +5812,10 @@ static bool sf2000_try_load_linux_elf(MachineState *machine)
     gsize dtb_size;
     GError *err = NULL;
 
+    if (!machine->kernel_filename) {
+        return false;
+    }
+
     kernel_size = load_elf(machine->kernel_filename, NULL,
                            cpu_mips_kseg0_to_phys, NULL,
                            &kernel_entry, &kernel_low, &kernel_high,
@@ -4360,6 +5841,7 @@ static bool sf2000_try_load_linux_elf(MachineState *machine)
         }
         exit(1);
     }
+
     dtb = g_memdup2(dtb_contents, dtb_size);
     dtb_paddr = QEMU_ALIGN_UP(kernel_high, SF2000_LINUX_DTB_ALIGN);
     if (dtb_paddr + dtb_size > machine->ram_size) {
@@ -4392,10 +5874,9 @@ static void sf2000_load_kernel(MachineState *machine)
     if (!machine->kernel_filename) {
         return;
     }
-    if (sf2000_try_load_linux_elf(machine)) {
-        return;
+    if (!sf2000_try_load_linux_elf(machine)) {
+        sf2000_load_asd(machine);
     }
-    sf2000_load_asd(machine);
 }
 
 static void sf2000_seed_boot_handoff(void)
@@ -4441,6 +5922,8 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_dma_wr_len = 0;
     sf2000_sdio_xfer_done = false;
     sf2000_sdio_xfer_busy = false;
+    sf2000_sdio_write_active = false;
+    sf2000_sdio_pio_state = 0;
     sf2000_sdio_irq_pending = false;
     sf2000_sdio_callback_pending = false;
     sf2000_sdio_app_cmd = false;
@@ -4492,8 +5975,17 @@ static void sf2000_init(MachineState *machine)
     sf2000_adc_ctrl[1] = 0x20001400;
     sf2000_adc_ctrl[2] = 0x00000f2d;
     sf2000_adc_ctrl[3] = 0x00000001;
-    sf2000_irq_enable1 = 0x00480415;
-    sf2000_irq_enable2 = 0x003c0008;
+    /*
+     * Probe captures contain the masks after the vendor SDK has initialized
+     * the interrupt controller.  They are not reset values: pre-enabling the
+     * SDIO bit lets a polled command hold EIRQ3 high before Linux installs an
+     * SDIO child handler, starving the scheduler timer.  Start masked and let
+     * each guest establish its own routing.
+     */
+    sf2000_irq_enable1 = 0;
+    sf2000_irq_enable2 = 0;
+    sf2000_audio_i2s_ctrl3c = 0x0000ff41;
+    sf2000_audio_i2s_fade90 = 0x008f0000;
     sf2000_i2c_data[0] = 0x00;
     sf2000_i2c_isr[0] = 0x00;
     sf2000_i2c_ier[0] = 0x00;
@@ -4516,11 +6008,6 @@ static void sf2000_init(MachineState *machine)
     memory_region_init_ram(ram, NULL, "sf2000.ram", machine->ram_size,
                            &error_fatal);
     memory_region_add_subregion(sysmem, SF2000_RAM_BASE, ram);
-    memory_region_init_io(&sf2000_progress_region, NULL,
-                          &sf2000_progress_region_ops, NULL,
-                          "sf2000.progress", sizeof(sf2000_progress_shadow));
-    memory_region_add_subregion_overlap(sysmem, SF2000_PROGRESS_PHYS,
-                                        &sf2000_progress_region, 1);
     sf2000_seed_boot_handoff();
 
     memory_region_init_io(mmio, NULL, &sf2000_unimp_ops, NULL,
@@ -4532,6 +6019,81 @@ static void sf2000_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(lcd), 0, SF2000_LCD_MMIO_BASE);
     qemu_input_handler_activate(qemu_input_handler_register(
         lcd, &sf2000_keyboard_handler));
+    sf2000_panel_readback_selftest();
+    sf2000_audio_backend_init(machine);
+    sf2000_usb_link_powered[0] = true;
+    sf2000_usb_link_powered[1] = true;
+    sf2000_usb_link_active[0] = false;
+    sf2000_usb_link_active[1] = false;
+    sf2000_usb_power_reg[0] = SF2000_MUSB_POWER_RESET_READ;
+    sf2000_usb_power_reg[1] = SF2000_MUSB_POWER_RESET_READ;
+    sf2000_usb_devctl_reg[0] = SF2000_MUSB_DEVCTL_RESET_READ;
+    sf2000_usb_devctl_reg[1] = SF2000_MUSB_DEVCTL_RESET_READ;
+    sf2000_usb_regs[0][0x380 >> 2] = sf2000_board_profile_spec()->usb_utmi380;
+    sf2000_usb_regs[1][0x380 >> 2] = sf2000_board_profile_spec()->usb_utmi380;
+    sf2000_usb_regs[0][0x384 >> 2] = sf2000_board_profile_spec()->usb_phy384;
+    sf2000_usb_regs[1][0x384 >> 2] = sf2000_board_profile_spec()->usb_phy384;
+    sf2000_audio_state_selftest();
+    sf2000_audio_pcm_selftest();
+    sf2000_audio_gate_live_selftest();
+    sf2000_audio_gate_live_variant_selftest();
+    sf2000_audio_hw_close_selftest();
+    sf2000_pwm2_backlight_selftest();
+    g_autofree char *pwm2_backlight_active =
+        sf2000_machine_pwm2_backlight_active_get(NULL, NULL);
+    sf2000_pwm2_backlight_blank_selftest();
+    sf2000_usb_reset_block_selftest();
+    sf2000_usb_link_state_selftest();
+    sf2000_usb_phy_snapshot_selftest();
+    g_autofree char *gate_live_l = sf2000_machine_audio_gate_l_live_get(NULL, NULL);
+    g_autofree char *gate_live_r = sf2000_machine_audio_gate_r_live_get(NULL, NULL);
+
+    g_autofree char *usb0_power = sf2000_machine_usb0_power_get(NULL, NULL);
+    g_autofree char *usb1_power = sf2000_machine_usb1_power_get(NULL, NULL);
+
+    info_report("sf2000: board profile=%s panel=0x%08x probe=%08x/%08x gpio=%s audio=%s open=%s runtime_open=%s open_returns=%s close_returns=%s hw_close=%s gate_state=%s gate_live_l=%s gate_live_r=%s sr=%u ch=%u runtime_ch=%u "
+                "pwm2_backlight_active=%s "
+                "period=%u/%u vol=%u gain=%u gate=%s gate_l=0x%08x/0x%08x gate_r=0x%08x/0x%08x "
+                "mux=%s hw=%u snd0=0x%08x dac=0x%08x usb0=%s usb1=%s usb0_power=%s usb1_power=%s hub=%s ports=%u "
+                "storage-reset=%s",
+                sf2000_board_profile_name(),
+                sf2000_board_profile_spec()->panel_id,
+                sf2000_board_profile_spec()->panel_probe_sig1,
+                sf2000_board_profile_spec()->panel_probe_sig2,
+                sf2000_board_profile_spec()->gpio_init,
+                sf2000_board_profile_spec()->audio_route,
+                sf2000_board_profile_spec()->audio_open_route,
+                sf2000_board_profile_spec()->audio_runtime_route,
+                sf2000_board_profile_spec()->audio_open_returns,
+                sf2000_board_profile_spec()->audio_close_returns,
+                sf2000_board_profile_spec()->audio_hw_close,
+                sf2000_audio_output_active() ? "open" : "closed",
+                gate_live_l,
+                gate_live_r,
+                sf2000_board_profile_spec()->audio_sample_rate_hz,
+                sf2000_board_profile_spec()->audio_channels,
+                sf2000_board_profile_spec()->audio_runtime_channels,
+                pwm2_backlight_active,
+                sf2000_board_profile_spec()->audio_period_frames,
+                sf2000_board_profile_spec()->audio_periods,
+                sf2000_board_profile_spec()->audio_volume,
+                sf2000_board_profile_spec()->audio_gain,
+                sf2000_board_profile_spec()->audio_gate_route,
+                sf2000_board_profile_spec()->audio_gate_l0,
+                sf2000_board_profile_spec()->audio_gate_l1,
+                sf2000_board_profile_spec()->audio_gate_r0,
+                sf2000_board_profile_spec()->audio_gate_r1,
+                sf2000_board_profile_spec()->audio_mux_open,
+                sf2000_board_profile_spec()->audio_hw_backend,
+                sf2000_board_profile_spec()->audio_hw_snd0,
+                sf2000_board_profile_spec()->audio_hw_dac,
+                sf2000_board_profile_spec()->usb0_route,
+                sf2000_board_profile_spec()->usb1_route,
+                usb0_power,
+                usb1_power,
+                sf2000_board_profile_spec()->usb_root_hub_id,
+                sf2000_board_profile_spec()->usb_root_hub_ports,
+                sf2000_board_profile_spec()->storage_reset);
 
     sf2000_sdio_blk = blk_by_name("sd0");
     dinfo = sf2000_sdio_blk ? NULL : drive_get(IF_SD, 0, 0);
@@ -4539,16 +6101,20 @@ static void sf2000_init(MachineState *machine)
         sf2000_sdio_blk = blk_by_legacy_dinfo(dinfo);
     }
     if (sf2000_sdio_blk) {
-        Error *local_err = NULL;
+        int ret = blk_set_perm(sf2000_sdio_blk,
+                               BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE,
+                               BLK_PERM_ALL, &error_fatal);
 
-        if (blk_set_perm(sf2000_sdio_blk,
-                         BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE,
-                         BLK_PERM_ALL, &local_err) < 0) {
-            warn_report_err(local_err);
+        if (ret < 0) {
+            exit(1);
         }
         info_report("sf2000: using SD image '%s'", blk_name(sf2000_sdio_blk));
+        if (sf2000_storage_selftest_raw) {
+            sf2000_sdio_raw_writeback_selftest();
+        }
     } else {
         info_report("sf2000: no SD image supplied; using synthetic FAT probe media");
+        sf2000_sdio_synth_writeback_selftest();
     }
 
     sf2000_load_bootrom(machine, sysmem);
@@ -4568,6 +6134,130 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
     mc->no_parallel = true;
     mc->no_floppy = true;
     mc->no_cdrom = true;
+    machine_add_audiodev_property(mc);
+    object_class_property_add_str(oc, "board-profile",
+                                  sf2000_machine_board_profile_get,
+                                  sf2000_machine_board_profile_set);
+    object_class_property_add_str(oc, "audio-route",
+                                  sf2000_machine_audio_route_get, NULL);
+    object_class_property_add_str(oc, "audio-open-route",
+                                  sf2000_machine_audio_open_route_get, NULL);
+    object_class_property_add_str(oc, "audio-runtime-route",
+                                  sf2000_machine_audio_runtime_route_get, NULL);
+    object_class_property_add_str(oc, "audio-open-returns",
+                                  sf2000_machine_audio_open_returns_get, NULL);
+    object_class_property_add_str(oc, "audio-close-returns",
+                                  sf2000_machine_audio_close_returns_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-route",
+                                  sf2000_machine_audio_gate_route_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-l",
+                                  sf2000_machine_audio_gate_l_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-r",
+                                  sf2000_machine_audio_gate_r_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-l-live",
+                                  sf2000_machine_audio_gate_l_live_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-r-live",
+                                  sf2000_machine_audio_gate_r_live_get, NULL);
+    object_class_property_add_str(oc, "audio-mux",
+                                  sf2000_machine_audio_mux_get, NULL);
+    object_class_property_add_str(oc, "audio-hw-backend",
+                                  sf2000_machine_audio_hw_backend_get, NULL);
+    object_class_property_add_str(oc, "audio-hw-snd0",
+                                  sf2000_machine_audio_hw_snd0_get, NULL);
+    object_class_property_add_str(oc, "audio-hw-dac",
+                                  sf2000_machine_audio_hw_dac_get, NULL);
+    object_class_property_add_str(oc, "audio-hw-close",
+                                  sf2000_machine_audio_hw_close_get, NULL);
+    object_class_property_add_str(oc, "audio-volume",
+                                  sf2000_machine_audio_volume_get, NULL);
+    object_class_property_add_str(oc, "audio-gain",
+                                  sf2000_machine_audio_gain_get, NULL);
+    object_class_property_add_str(oc, "audio-muted",
+                                  sf2000_machine_audio_muted_get, NULL);
+    object_class_property_add_str(oc, "audio-gate-state",
+                                  sf2000_machine_audio_gate_state_get, NULL);
+    object_class_property_add_str(oc, "audio-power",
+                                  sf2000_machine_audio_power_get, NULL);
+    object_class_property_add_str(oc, "audio-backend-ready",
+                                  sf2000_machine_audio_backend_ready_get, NULL);
+    object_class_property_add_str(oc, "audio-dac-value",
+                                  sf2000_machine_audio_dac_value_get, NULL);
+    object_class_property_add_str(oc, "audio-sample-rate",
+                                  sf2000_machine_audio_sample_rate_get, NULL);
+    object_class_property_add_str(oc, "audio-channels",
+                                  sf2000_machine_audio_channels_get, NULL);
+    object_class_property_add_str(oc, "audio-runtime-channels",
+                                  sf2000_machine_audio_runtime_channels_get, NULL);
+    object_class_property_add_str(oc, "audio-period-frames",
+                                  sf2000_machine_audio_period_frames_get, NULL);
+    object_class_property_add_str(oc, "audio-periods",
+                                  sf2000_machine_audio_periods_get, NULL);
+    object_class_property_add_str(oc, "panel-id",
+                                  sf2000_machine_panel_id_get, NULL);
+    object_class_property_add_str(oc, "panel-te-hz",
+                                  sf2000_machine_panel_te_hz_get, NULL);
+    object_class_property_add_str(oc, "panel-probe-sig1",
+                                  sf2000_machine_panel_probe_sig1_get, NULL);
+    object_class_property_add_str(oc, "panel-probe-sig2",
+                                  sf2000_machine_panel_probe_sig2_get, NULL);
+    object_class_property_add_str(oc, "gpio-init",
+                                  sf2000_machine_gpio_init_get, NULL);
+    object_class_property_add_str(oc, "gpio-l-out",
+                                  sf2000_machine_gpio_l_out_get, NULL);
+    object_class_property_add_str(oc, "pwm2-backlight",
+                                  sf2000_machine_pwm2_backlight_get, NULL);
+    object_class_property_add_str(oc, "pwm2-backlight-active",
+                                  sf2000_machine_pwm2_backlight_active_get,
+                                  NULL);
+    object_class_property_add_str(oc, "audio-i2s-ctrl3c",
+                                  sf2000_machine_audio_i2s_ctrl3c_get, NULL);
+    object_class_property_add_str(oc, "audio-i2s-fade90",
+                                  sf2000_machine_audio_i2s_fade90_get, NULL);
+    object_class_property_add_bool(oc, "storage-selftest-raw",
+                                   sf2000_machine_storage_selftest_raw_get,
+                                   sf2000_machine_storage_selftest_raw_set);
+    object_class_property_add_str(oc, "usb0-route",
+                                  sf2000_machine_usb0_route_get, NULL);
+    object_class_property_add_str(oc, "usb1-route",
+                                  sf2000_machine_usb1_route_get, NULL);
+    object_class_property_add_str(oc, "usb-root-hub-id",
+                                  sf2000_machine_usb_root_hub_id_get, NULL);
+    object_class_property_add_str(oc, "usb-root-hub-ports",
+                                  sf2000_machine_usb_root_hub_ports_get, NULL);
+    object_class_property_add_str(oc, "usb-ctl0",
+                                  sf2000_machine_usb_ctl0_get, NULL);
+    object_class_property_add_str(oc, "usb-ctl1",
+                                  sf2000_machine_usb_ctl1_get, NULL);
+    object_class_property_add_str(oc, "usb-phy0",
+                                  sf2000_machine_usb_phy0_get, NULL);
+    object_class_property_add_str(oc, "usb-phy1",
+                                  sf2000_machine_usb_phy1_get, NULL);
+    object_class_property_add_str(oc, "usb-phy2",
+                                  sf2000_machine_usb_phy2_get, NULL);
+    object_class_property_add_str(oc, "usb-phy3",
+                                  sf2000_machine_usb_phy3_get, NULL);
+    object_class_property_add_str(oc, "storage-reset",
+                                  sf2000_machine_storage_reset_get, NULL);
+    object_class_property_add_str(oc, "usb0-state",
+                                  sf2000_machine_usb0_state_get, NULL);
+    object_class_property_add_str(oc, "usb1-state",
+                                  sf2000_machine_usb1_state_get, NULL);
+    object_class_property_add_str(oc, "usb0-devctl",
+                                  sf2000_machine_usb0_devctl_get, NULL);
+    object_class_property_add_str(oc, "usb1-devctl",
+                                  sf2000_machine_usb1_devctl_get, NULL);
+    object_class_property_add_str(oc, "usb0-power",
+                                  sf2000_machine_usb0_power_get, NULL);
+    object_class_property_add_str(oc, "usb1-power",
+                                  sf2000_machine_usb1_power_get, NULL);
+    object_class_property_add_str(oc, "usb0-utmi380",
+                                  sf2000_machine_usb0_utmi380_get, NULL);
+    object_class_property_add_str(oc, "usb1-utmi380",
+                                  sf2000_machine_usb1_utmi380_get, NULL);
+    object_class_property_add_str(oc, "usb0-phy384",
+                                  sf2000_machine_usb0_phy384_get, NULL);
+    object_class_property_add_str(oc, "usb1-phy384",
+                                  sf2000_machine_usb1_phy384_get, NULL);
 }
 
 static const TypeInfo sf2000_machine_type = {

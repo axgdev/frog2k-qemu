@@ -32,6 +32,9 @@ FIRMWARE_ORIGINAL ?= $(FIRMWARE_DIR)/SF2000_XMC_XM25QH40B_4mbit.bin
 FIRMWARE ?= $(FIRMWARE_BUGFIX)
 ASD ?= $(FIRMWARE_DIR)/bisrv_08_03.asd
 GB300_ASD ?= /root/host-frogdev/universal/sf2000_gb300_multicore_private/bisrv_gb300_v2.asd
+LINUX_ELF ?= /root/host-frogdev/universal/sf2000_linux/build/linux-sf2000-buildroot/vmlinux
+LINUX_DTB ?= /root/host-frogdev/universal/sf2000_linux/build/sf2000.dtb
+LINUX_ROM_SD_IMAGE ?= /root/host-frogdev/universal/sf2000_linux/build/sf2000-linux-buildroot-rom.sd.img
 GDB ?= /opt/gdb-mips-toolchain/bin/mipsel-mti-elf-gdb
 VNC ?= 127.0.0.1:1
 LOG ?= build/logs/sf2000.log
@@ -45,10 +48,11 @@ VIDEO_FRAMERATE ?= 12
 VIDEO_GMA_DUMP_LIMIT ?= 300
 SD_IMAGE ?=
 SD_ARGS = $(if $(SD_IMAGE),-drive if=none,id=sd0,file=$(SD_IMAGE),format=raw,)
+GB300_MACHINE_ARGS ?= -M sf2000,board-profile=gb300
 
 -include config.mk
 
-.PHONY: all help deps build-info check-firmware check-bugfix-firmware check-asd check-gb300-asd ccache-stats ccache-zero fetch patch configure build vanilla-sd run-vnc run-vnc-vanilla run-headless boot-stock-asd boot-gb300-asd debug capture-stock-ui capture-vanilla-ui capture-vanilla-video smoke smoke-input smoke-stock-bootloader smoke-stock-full smoke-stock-full-bugfix smoke-stock-full-vanilla smoke-stock-full-fat16 smoke-stock-asd smoke-stock-fatfs smoke-stock-display smoke-gb300-asd smoke-gb300-fatfs smoke-gb300-display clean distclean
+.PHONY: all help deps build-info check-firmware check-bugfix-firmware check-asd check-gb300-asd check-linux-elf check-linux-rom-sd ccache-stats ccache-zero fetch patch configure build vanilla-sd run-vnc run-vnc-vanilla run-headless boot-stock-asd boot-gb300-asd boot-linux-elf debug capture-stock-ui capture-vanilla-ui capture-vanilla-video smoke smoke-input smoke-linux-elf smoke-linux-reboot smoke-stock-bootloader smoke-stock-full smoke-stock-full-bugfix smoke-stock-full-vanilla smoke-stock-full-fat16 smoke-stock-asd smoke-stock-fatfs smoke-stock-fatfs-writeback smoke-stock-display smoke-gb300-asd smoke-gb300-fatfs smoke-gb300-display clean distclean
 
 all: build
 
@@ -69,9 +73,12 @@ help:
 		'  make smoke-stock-full-fat16 run the same bootloader path on FAT16' \
 		'  make smoke-stock-asd verify direct stock ASD boot reaches early MMIO' \
 		'  make smoke-stock-fatfs verify stock ASD reaches SD/FatFs mount' \
+		'  make smoke-stock-fatfs-writeback verify raw SD writeback against a real image' \
 		'  make smoke-stock-display verify stock ASD drives GMA scanout' \
 		'  make smoke-gb300-fatfs verify direct GB300 ASD reaches SD/FatFs mount' \
 		'  make smoke-gb300-display verify direct GB300 ASD drives GMA scanout' \
+		'  make smoke-linux-elf verify direct Linux ELF + DTB boot reaches /init' \
+		'  make smoke-linux-reboot verify Linux watchdog reboot through stock bootloader' \
 		'  make run-vnc       run with VNC display, default 127.0.0.1:5901' \
 		'  make run-vnc SD_IMAGE=/path/sd.img attach a raw SD-card image' \
 		'  make run-vnc-vanilla run stock UI with generated vanilla SD image' \
@@ -81,6 +88,7 @@ help:
 		'  make vanilla-sd    build a generated FAT32 image from the vanilla OS zip' \
 		'  make boot-stock-asd run stock boot ROM plus direct stock ASD load' \
 		'  make boot-gb300-asd run stock boot ROM plus direct GB300 ASD load' \
+		'  make boot-linux-elf run direct Linux ELF + DTB boot' \
 		'  make debug         run paused with GDB stub on :1234' \
 		'  make gdb           connect mipsel-mti-elf-gdb to :1234' \
 		'  make clean         remove QEMU build directory only' \
@@ -107,6 +115,9 @@ build-info:
 	@printf 'original firmware: %s\n' '$(FIRMWARE_ORIGINAL)'
 	@printf 'asd: %s\n' '$(ASD)'
 	@printf 'gb300 asd: %s\n' '$(GB300_ASD)'
+	@printf 'linux elf: %s\n' '$(LINUX_ELF)'
+	@printf 'linux dtb: %s\n' '$(LINUX_DTB)'
+	@printf 'linux rom sd image: %s\n' '$(LINUX_ROM_SD_IMAGE)'
 
 check-firmware:
 	@test -f '$(FIRMWARE)' || { \
@@ -133,6 +144,25 @@ check-gb300-asd:
 	@test -f '$(GB300_ASD)' || { \
 		printf 'missing GB300_ASD: %s\n' '$(GB300_ASD)' >&2; \
 		printf 'set it with: make <target> GB300_ASD=/path/to/bisrv_gb300_v2.asd\n' >&2; \
+		exit 1; \
+	}
+
+check-linux-elf:
+	@test -f '$(LINUX_ELF)' || { \
+		printf 'missing LINUX_ELF: %s\n' '$(LINUX_ELF)' >&2; \
+		printf 'build sf2000_linux or set it with: make <target> LINUX_ELF=/path/to/vmlinux\n' >&2; \
+		exit 1; \
+	}
+	@test -f '$(LINUX_DTB)' || { \
+		printf 'missing LINUX_DTB: %s\n' '$(LINUX_DTB)' >&2; \
+		printf 'build sf2000_linux or set it with: make <target> LINUX_DTB=/path/to/sf2000.dtb\n' >&2; \
+		exit 1; \
+	}
+
+check-linux-rom-sd:
+	@test -f '$(LINUX_ROM_SD_IMAGE)' || { \
+		printf 'missing LINUX_ROM_SD_IMAGE: %s\n' '$(LINUX_ROM_SD_IMAGE)' >&2; \
+		printf 'build sf2000_linux linux-buildroot-rom-sd or set it with: make <target> LINUX_ROM_SD_IMAGE=/path/to/sd.img\n' >&2; \
 		exit 1; \
 	}
 
@@ -247,6 +277,13 @@ boot-gb300-asd: build check-firmware check-gb300-asd
 		-serial none -monitor stdio \
 		-d guest_errors,unimp -D $(LOG)
 
+boot-linux-elf: build check-linux-elf
+	mkdir -p $(dir $(LOG))
+	$(QEMU_BIN) -M sf2000 -cpu 4Kc -kernel $(LINUX_ELF) -dtb $(LINUX_DTB) \
+		-display vnc=$(VNC) \
+		-serial none -monitor stdio \
+		-d guest_errors,unimp -D $(LOG)
+
 capture-stock-ui: build $(STOCK_SD_IMAGE)
 	mkdir -p $(dir $(LOG)) $(dir $(SCREENSHOT)) $(GMA_DUMP_DIR)
 	(sleep $(CAPTURE_DELAY); printf 'screendump %s\n' '$(SCREENSHOT)'; \
@@ -331,6 +368,31 @@ smoke-input: build
 	grep -q 'sf2000: key qcode=right down=1' build/logs/smoke-input.log
 	grep -q 'sf2000: key qcode=x down=1' build/logs/smoke-input.log
 
+smoke-linux-elf: build check-linux-elf
+	mkdir -p build/logs
+	timeout 90s $(QEMU_BIN) -M sf2000 -cpu 4Kc \
+		-kernel $(LINUX_ELF) -dtb $(LINUX_DTB) \
+		-display none -serial none -monitor none \
+		-d guest_errors,unimp -D build/logs/smoke-linux-elf.log \
+		> build/logs/smoke-linux-elf.console 2>&1 || test $$? -eq 124
+	grep -q 'sf2000: loaded Linux ELF' build/logs/smoke-linux-elf.console
+	grep -q 'sf2000: uart: .*Linux version' build/logs/smoke-linux-elf.log
+	grep -q 'binfmt_flat: SF2000 NOMMU FLAT entry' build/logs/smoke-linux-elf.log
+
+smoke-linux-reboot: build check-bugfix-firmware check-linux-rom-sd
+	mkdir -p build/logs
+	(sleep 45; printf 'sendkey backspace 1000\n'; sleep 15; \
+		printf 'quit\n') | \
+		$(QEMU_BIN) -M sf2000 -bios $(FIRMWARE_BUGFIX) \
+		-drive if=none,id=sd0,file=$(LINUX_ROM_SD_IMAGE),format=raw \
+		-display none -serial none -monitor stdio \
+		-d guest_errors,unimp -D build/logs/smoke-linux-reboot.log \
+		> build/logs/smoke-linux-reboot.console 2>&1
+	grep -q 'sf2000-screen: SELECT pressed, restarting' build/logs/smoke-linux-reboot.log
+	grep -q 'sf2000-screen: direct watchdog reset' build/logs/smoke-linux-reboot.log
+	grep -q 'sf2000: watchdog reboot requested' build/logs/smoke-linux-reboot.log
+	test "$$(grep -c 'sf2000: uart:  Hichip Bootloader' build/logs/smoke-linux-reboot.log)" -ge 2
+
 smoke-stock-bootloader: build
 	mkdir -p build/logs
 	timeout 15s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) \
@@ -405,21 +467,50 @@ smoke-stock-fatfs: build
 		-d guest_errors,unimp -D build/logs/smoke-stock-fatfs.log \
 		> build/logs/smoke-stock-fatfs.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-stock-fatfs.console
+	grep -q 'sf2000: synthetic FAT probe writeback selftest ok' build/logs/smoke-stock-fatfs.console
 	grep -q 'uart: \[FS\]successed!' build/logs/smoke-stock-fatfs.log
+
+smoke-stock-fatfs-writeback: build
+	mkdir -p build/logs
+	tmp_sd=$$(mktemp build/sf2000-storage-writeback.XXXXXX.img); \
+	trap 'rm -f $$tmp_sd' EXIT; \
+	truncate -s 1M $$tmp_sd; \
+	timeout 10s $(QEMU_BIN) -M sf2000,storage-selftest-raw=on -bios $(FIRMWARE) \
+		-drive if=none,id=sd0,file=$$tmp_sd,format=raw \
+		-display none -serial none -monitor none \
+		-d guest_errors,unimp -D build/logs/smoke-stock-fatfs-writeback.log \
+		> build/logs/smoke-stock-fatfs-writeback.console 2>&1 || test $$? -eq 124; \
+	grep -q 'sf2000: using SD image' build/logs/smoke-stock-fatfs-writeback.console; \
+	grep -q 'sf2000: raw SD probe DMA writeback selftest ok lba=16 sectors=2' build/logs/smoke-stock-fatfs-writeback.console; \
+	od -An -tx1 -N 16 -j $$((16 * 512)) $$tmp_sd | grep -q '5a 5a 5a 5a 5a 5a 5a 5a'; \
+	od -An -tx1 -N 16 -j $$((17 * 512)) $$tmp_sd | grep -q '5a 5a 5a 5a 5a 5a 5a 5a'
 
 smoke-stock-display: build
 	mkdir -p build/logs
 	SF2000_TRACE_GMA=1 timeout 45s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) -kernel $(ASD) \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D build/logs/smoke-stock-display.log \
-		> build/logs/smoke-stock-display.console 2>&1 || test $$? -eq 124
+	> build/logs/smoke-stock-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-stock-display.console
+	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=false' build/logs/smoke-stock-display.console
+	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: audio pcm selftest ok board=sf2000 sample0=2048 sample1=-2048' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: audio hw close selftest ok board=sf2000 backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 hw_period=0 hw_periods=0' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: pwm2 backlight selftest ok board=sf2000 clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: pwm2 backlight blank selftest ok board=sf2000 sample=0xff000000' build/logs/smoke-stock-display.console
+	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000070/0x00000099 usb1=0x00000070/0x00000099' build/logs/smoke-stock-display.log
+	grep -q 'usb0_power=0x00000070 usb1_power=0x00000070' build/logs/smoke-stock-display.console
+	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: usb phy snapshot selftest ok board=sf2000 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-stock-display.log
+	grep -q 'sf2000: audio setup route=sf2000-default-amp' build/logs/smoke-stock-display.console
 	grep -q 'gma-present .*mode=12' build/logs/smoke-stock-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-stock-display.log
 
 smoke-gb300-asd: build check-gb300-asd
 	mkdir -p build/logs
-	timeout 3s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) -kernel $(GB300_ASD) \
+	timeout 3s $(QEMU_BIN) $(GB300_MACHINE_ARGS) -bios $(FIRMWARE) -kernel $(GB300_ASD) \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D build/logs/smoke-gb300-asd.log \
 		> build/logs/smoke-gb300-asd.console 2>&1 || test $$? -eq 124
@@ -428,7 +519,7 @@ smoke-gb300-asd: build check-gb300-asd
 
 smoke-gb300-fatfs: build check-gb300-asd
 	mkdir -p build/logs
-	timeout 45s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) -kernel $(GB300_ASD) \
+	timeout 45s $(QEMU_BIN) $(GB300_MACHINE_ARGS) -bios $(FIRMWARE) -kernel $(GB300_ASD) \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D build/logs/smoke-gb300-fatfs.log \
 		> build/logs/smoke-gb300-fatfs.console 2>&1 || test $$? -eq 124
@@ -437,14 +528,156 @@ smoke-gb300-fatfs: build check-gb300-asd
 
 smoke-gb300-display: build check-gb300-asd
 	mkdir -p build/logs
-	SF2000_TRACE_GMA=1 timeout 45s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) -kernel $(GB300_ASD) \
+	SF2000_TRACE_GMA=1 timeout 45s $(QEMU_BIN) $(GB300_MACHINE_ARGS) -bios $(FIRMWARE) -kernel $(GB300_ASD) \
 		-display none -serial none -monitor none \
 		-d guest_errors,unimp -D build/logs/smoke-gb300-display.log \
-		> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
+	> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-gb300-display.console
+	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=false' build/logs/smoke-gb300-display.console
+	grep -q 'sf2000: audio state selftest ok board=gb300' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: audio pcm selftest ok board=gb300 sample0=2048 sample1=-2048' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: audio gate live variant selftest ok board=gb300' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: audio hw close selftest ok board=gb300 backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 hw_period=0 hw_periods=0' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: pwm2 backlight selftest ok board=gb300 clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: pwm2 backlight blank selftest ok board=gb300 sample=0xff000000' build/logs/smoke-gb300-display.console
+	grep -q 'sf2000: panel readback selftest ok board=gb300 panel=0x00009306' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: usb reset block selftest ok board=gb300 usb0=0x00000070/0x00000099 usb1=0x00000070/0x00000099' build/logs/smoke-gb300-display.log
+	grep -q 'usb0_power=0x00000070 usb1_power=0x00000070' build/logs/smoke-gb300-display.console
+	grep -q 'sf2000: usb link state selftest ok board=gb300' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: usb phy snapshot selftest ok board=gb300 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: lcd profile=gb300 panel=0x00009306 geometry=240x320' build/logs/smoke-gb300-display.console
 	grep -q 'uart: L115(board.c):LCD_TYPE_ST7789V_MCU8080' build/logs/smoke-gb300-display.log
 	grep -q 'gma-present .*mode=12' build/logs/smoke-gb300-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-gb300-display.log
+
+smoke-board-contract: build
+	mkdir -p build/logs
+	(printf '{"execute":"qmp_capabilities"}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"board-profile"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-route"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-open-route"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-runtime-route"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-open-returns"}}\n'; \
+ printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-close-returns"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gate-route"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gate-l"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gate-r"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gate-l-live"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gate-r-live"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-mux"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-hw-backend"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-hw-snd0"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-hw-dac"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-hw-close"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-volume"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gain"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-muted"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-gate-state"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-backend-ready"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-sample-rate"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-channels"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-runtime-channels"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-period-frames"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-periods"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"panel-id"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"panel-te-hz"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"panel-probe-sig1"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"panel-probe-sig2"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"gpio-init"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"gpio-l-out"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"pwm2-backlight"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"pwm2-backlight-active"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-ctrl3c"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-fade90"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-id"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-ports"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-ctl0"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-ctl1"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-phy0"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-phy1"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-phy2"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-phy3"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"storage-reset"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-state"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-state"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-power"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-power"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-devctl"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-devctl"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-utmi380"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-utmi380"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb0-phy384"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb1-phy384"}}\n'; \
+	 printf '{"execute":"quit"}\n') | \
+		timeout 20s $(QEMU_BIN) -M sf2000 -bios $(FIRMWARE) \
+		-display none -serial none -monitor none -qmp stdio \
+		-d guest_errors,unimp -D build/logs/smoke-board-contract.log \
+		> build/logs/smoke-board-contract.console 2>&1 || test $$? -eq 124
+	grep -q '"return": "sf2000"' build/logs/smoke-board-contract.console
+	grep -q '"return": "sf2000-default-amp"' build/logs/smoke-board-contract.console
+	grep -q '"return": "sf2000_left_only"' build/logs/smoke-board-contract.console
+	grep -q '"return": "sf2000_stereo_safe"' build/logs/smoke-board-contract.console
+	grep -q 'runtime_open=sf2000_stereo_safe .* runtime_ch=2' build/logs/smoke-board-contract.console
+	grep -q '"return": "volume_ret=-1 mute_ret=0 silence_ret=0 start_ret=0 unmute_ret=0 output_ret=0"' build/logs/smoke-board-contract.console
+	grep -q '"return": "mute_ret=-1 drop_ret=0 free_ret=0"' build/logs/smoke-board-contract.console
+	grep -q '"return": "sf2000_r07"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x390004fe/0x2b4085b3"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x000000a0/0x000000a0"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x390004fe/0x2b4085b3"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x000000a0/0x000000a0"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x390004fe/0x2b4085b3"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x000000a0/0x000000a0"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x390004fe/0x2b4085b3"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x000000a0/0x000000a0"' build/logs/smoke-board-contract.console
+	grep -q '"return": "l22=0 l23=0 l24=0 l25=0 l26=0 l27=0 l28=0 l29=0 r07=0"' build/logs/smoke-board-contract.console
+	grep -q '"return": "2"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x14fc0082"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x4200039e"' build/logs/smoke-board-contract.console
+	grep -q '"return": "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 hw_period=0 hw_periods=0"' build/logs/smoke-board-contract.console
+	grep -q '"return": "75"' build/logs/smoke-board-contract.console
+	grep -q '"return": "8"' build/logs/smoke-board-contract.console
+	grep -q 'pwm2_backlight_active=false' build/logs/smoke-board-contract.console
+	grep -q '"return": "closed"' build/logs/smoke-board-contract.console
+	grep -q '"return": "true"' build/logs/smoke-board-contract.console
+	grep -q '"return": "32000"' build/logs/smoke-board-contract.console
+	grep -q '"return": "1"' build/logs/smoke-board-contract.console
+	grep -q '"return": "2"' build/logs/smoke-board-contract.console
+	grep -q '"return": "1024"' build/logs/smoke-board-contract.console
+	grep -q '"return": "8"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00858552"' build/logs/smoke-board-contract.console
+	grep -q '"return": "60"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0xf3f3f2f2"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000004"' build/logs/smoke-board-contract.console
+	grep -q '"return": "l=0x150004ff/0x050004b2 r=0x00000020/0x00000020 mux_l22=0 mux_l23=0 mux_l24=0 mux_l25=0 mux_l26=0 mux_l27=0 mux_l28=0 mux_l29=2 mux_r07=7"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x040004b2"' build/logs/smoke-board-contract.console
+	grep -q '"return": "clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x0000ff41"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x008f0000"' build/logs/smoke-board-contract.console
+	grep -q '"return": "true"' build/logs/smoke-board-contract.console
+	grep -q '"return": "1d6b:0002"' build/logs/smoke-board-contract.console
+	grep -q '"return": "1"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x07000101"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000002"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x06060000"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00060606"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x06060606"' build/logs/smoke-board-contract.console
+	grep -q '"return": "mode=safe experimental=0 status=okay clock=198000000 bus-width=1 cap-highspeed=0 supports-highspeed=0 uhs-sdr12=0 uhs-sdr25=0 uhs-sdr50=0 no-1v8=1 broken-cd=1"' build/logs/smoke-board-contract.console
+	grep -q '"return": "powered-disconnected"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000070"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000070"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000099"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000099"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00570740"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00570740"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000010"' build/logs/smoke-board-contract.console
+	grep -q '"return": "0x00000010"' build/logs/smoke-board-contract.console
+	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-board-contract.log
+	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-board-contract.log
+	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-board-contract.log
+	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000070/0x00000099 usb1=0x00000070/0x00000099' build/logs/smoke-board-contract.log
+	grep -q 'usb0_power=0x00000070 usb1_power=0x00000070' build/logs/smoke-board-contract.console
+	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-board-contract.log
+	grep -q 'sf2000: usb phy snapshot selftest ok board=sf2000 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-board-contract.log
 
 clean:
 	rm -rf $(QEMU_SRC)/build

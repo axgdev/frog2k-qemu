@@ -48,21 +48,124 @@ until a board selector is needed. The next modelable board differences are:
 - Panel read IDs: implement the GPIO-8080 read direction and return board
   profile responses for `0x04`, `0x09`, `0x0a`, `0x0c`, `0xd3`,
   `0xda`, `0xdb`, and `0xdc`.
+  The model now also carries the board-specific `panel_probe_done` payload
+  observed in the boot trace as queryable `panel-probe-sig1` and
+  `panel-probe-sig2` properties so the remaining display work can track the
+  post-probe status bytes as data.
 - Panel geometry and transform: preserve the common 320x240 framebuffer path,
   but make MADCTL and set-address-window behavior visible enough to catch
-  rotated or mirrored init mistakes.
+  rotated or mirrored init mistakes. QEMU now has an explicit `board-profile`
+  selector, and GB300 display tests use `board-profile=gb300` so the rotated
+  240x320 geometry comes from board data instead of a hidden firmware quirk.
+  The same profile record now carries the current panel ID, audio and USB
+  route labels, plus the panel TE rate, and the machine exposes them as
+  read-only `panel-id`, `panel-te-hz`, `audio-route`, `usb0-route`, and
+  `usb1-route` properties so the family-specific wiring, identity, and timing
+  are visible in one place. QEMU also boot-checks the captured panel readback
+  table against the board profile at machine init. The captured panel IDs are
+  board-specific: the SF2000 stock path observes `0x858552`, while GB300
+  observes `0x009306`.
 - Input matrix: keep local L23/L24 shift-register scanning separate from the
   GPIO-bitbanged RF bus on L27/L28/L29. GB300-family USB gamepad support should
   be modeled as a separate USB host path, not mixed into the RF receiver.
 - Audio and amplifier routing: UniFrog already uses LCD ID clues for board
-  routing. QEMU should move toward an explicit board profile once those routes
-  are validated.
+  routing. The explicit board profile now carries the route labels and exposes
+  them as machine properties, and the stock display smoke now observes the
+  startup DAC write as `sf2000: audio setup route=...`. The emulator also
+  exposes the current `audio-power` state, a live `audio-backend-ready`
+  hookup, first `audio-dac-value`, the board-level `audio-gate-route`, the
+  observed gate-word pairs as `audio-gate-l` and `audio-gate-r`, and the
+  runtime gate-word snapshot as `audio-gate-l-live` and `audio-gate-r-live`,
+  and the
+  observed audio volume/gain pair as `audio-volume` and `audio-gain`, and the
+  observed mute gate as `audio-muted` (true at reset until the audio path is
+  powered), plus the runtime gate state as `audio-gate-state`, and the
+  runtime live gate snapshot as `audio-gate-l-live` and `audio-gate-r-live`,
+  both of which are boot-checked as part of the audio contract. The live
+  backend also self-tests the generated PCM waveform path so the waveform
+  generator stays visible during boot, and the observed mono-left playback
+  contract as read-only `audio-sample-rate`,
+  `audio-channels`, `audio-period-frames`, `audio-periods`,
+  `audio-i2s-ctrl3c`, and `audio-i2s-fade90` properties, but it still needs the
+  full amplifier chain and guest-driven PCM flow before this becomes a
+  complete functional model. The boot log now also self-tests the audio
+  mute/power transition so the reset-muted contract is checked before
+  firmware runs.
+  The captured libretro-open return tuple is also exposed as
+  `audio-open-returns` so the open-path result that accompanies
+  `sf2000_left_only` stays visible in the contract.
+  The captured audio-close return tuple is also exposed as
+  `audio-close-returns` so the close-path result stays visible too.
+  The PWM2/backlight reset snapshot is also exposed as `pwm2-backlight` so
+  the boot-time backlight defaults stay visible alongside the rest of the
+  audio contract, and the live `pwm2-backlight-active` property reflects the
+  current on/off state that now blanks scanout when the backlight is off.
+  That blanking path is boot-checked so the display model proves the off-state
+  effect, not just the state snapshot.
+  The baseline boot log now prints that audio contract, the gate route, and
+  the USB topology in one line so the regression smoke can verify the board
+  shape directly.
+  Captured logs currently map the gate route to `sf2000_r07` on SF2000 and
+  `gb300_l15` on GB300.
 - Firmware images: SF2000 stock uses
   `/root/host-frogdev/universal/orig_firmware/bisrv_08_03.asd`; GB300 stock
   firmware is available at
   `/root/host-frogdev/universal/sf2000_gb300_multicore_private/bisrv_gb300_v2.asd`.
   The private symbol script maps both SF2000 and GB300 firmware addresses:
   `/root/host-frogdev/universal/sf2000_gb300_multicore_private/scripts/firmware-symbol.py`.
+- USB routing: the machine now exposes `usb0-state` and `usb1-state` as
+  read-only properties alongside the route labels, so controller link state
+  is queryable as `disconnected`, `powered-disconnected`, or
+  `session-active` even though downstream enumeration is still not modeled.
+  The root hub shape is also exposed as read-only `usb-root-hub-id` and
+  `usb-root-hub-ports` properties so the observed bus topology can be matched
+  against probe logs. The observed USB reset block is also queryable through
+  read-only `usb-ctl0`, `usb-ctl1`, `usb-phy0`, `usb-phy1`, `usb-phy2`, and
+  `usb-phy3` properties, which line up with the capture values from
+  `logprobe0001.txt` and `logprobe0014.txt`. The controller readback now also
+  reflects the powered host-shell state instead of returning only zeroes for
+  the status bytes, and the write path distinguishes powered-disconnected from
+  session-active so the queryable state mirrors the probe logs more closely.
+  The live devctl register snapshot is also exposed as `usb0-devctl` and
+  `usb1-devctl`, and the live UTMI/PHY snapshot is exposed as
+  `usb0-utmi380`, `usb1-utmi380`, `usb0-phy384`, and `usb1-phy384` so the raw
+  controller state can be compared directly against the boot-time USB probe
+  logs.
+  The boot-time reset shell now reads back `0x70` for POWER and `0x99` for
+  DEVCTL, matching the captured powered-disconnected snapshot at init; the
+  live devctl snapshot also steps through `0x80` and `0x81` when the model is
+  driven through the powered-disconnected and session-active transitions that
+  appear in the probe logs.
+  The raw power-byte shell is also exposed as `usb0-power` and `usb1-power`
+  so the captured `0x70` reset state stays visible alongside the devctl and
+  PHY snapshots.
+  The boot log now also self-tests the USB reset-block readback and the live
+  UTMI/PHY snapshot against the captured powered-disconnected shell on both
+  controllers.
+  The current probe evidence points to one powered downstream port per
+  controller, with no child device attached.
+- The generic GPIO-L output latch is also exposed as `gpio-l-out` so the
+  keypad and board-mux write path can be queried directly instead of only
+  inferred from guest traces.
+- The captured platform GPIO init snapshot is exposed as `gpio-init` so the
+  board-specific reset mux state can be checked directly instead of only
+  inferred from early boot traces.
+- The captured audio mux-open latch snapshot is exposed as `audio-mux` so the
+  libretro-open board-state line can be checked directly from QMP as well as
+  from the boot log.
+- The captured audio hardware open snapshot is also exposed as
+  `audio-hw-backend`, `audio-hw-snd0`, and `audio-hw-dac` so the backend
+  handshake seen in probe logs can be queried directly.
+- The captured audio hardware close snapshot is also exposed as
+  `audio-hw-close` so the close-path handshake seen in probe logs can be
+  queried directly.
+- The captured playback open route is exposed as `audio-open-route` so the
+  mono-left libretro-open path can be checked directly from QMP as well as
+  from the boot log.
+- The captured storage reset snapshot is exposed as `storage-reset` so the
+  stable `mode=safe` / `bus-width=1` / `no-1v8=1` boot-state contract can be
+  queried directly, while the later runtime `wide20` / `wide25` / `wide37`
+  transitions remain part of the guest-side storage work.
 
 ## Current GB300 Boot Status
 

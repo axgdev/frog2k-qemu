@@ -26,6 +26,9 @@ On Alpine:
 apk add --no-cache curl meson samurai patch pkgconf glib-dev pixman-dev py3-pip py3-distlib
 ```
 
+The current reverse-engineering and cross-compilation baseline is recorded in
+[docs/installed.md](docs/installed.md).
+
 Optional tools for generated vanilla SD-card images and captures:
 
 ```sh
@@ -302,6 +305,38 @@ generic QEMU SD bus:
 make run-vnc SD_IMAGE=/path/to/sd.img
 make boot-stock-asd SD_IMAGE=/path/to/sd.img
 ```
+
+## Boot Linux Directly
+
+For open-SDK and Linux bring-up, the machine can also boot a MIPS Linux ELF
+kernel directly with a DTB instead of wrapping the kernel in an ASD image:
+
+```sh
+make smoke-linux-elf
+make boot-linux-elf
+```
+
+The defaults point at the sibling `sf2000_linux` build output. Override them
+when testing another tree:
+
+```sh
+make boot-linux-elf LINUX_ELF=/path/to/vmlinux LINUX_DTB=/path/to/sf2000.dtb
+```
+
+Direct Linux boot passes the DTB pointer through the normal MIPS firmware
+argument registers. ASD boot remains available for testing the stock bootloader
+handoff path and SD-card update packaging.
+
+The watchdog reboot path is covered separately because it needs the stock
+bootloader plus an SD image containing the Linux ASD:
+
+```sh
+make smoke-linux-reboot
+```
+
+That target defaults to the sibling `sf2000_linux` generated ROM SD image and
+verifies that a Linux userspace SELECT-triggered reboot reaches the bootloader
+again. Override `LINUX_ROM_SD_IMAGE=/path/to/sd.img` for another image.
 
 ## Capture Frames and Video
 
