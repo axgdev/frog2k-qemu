@@ -492,7 +492,7 @@ smoke-stock-display: build
 		-d guest_errors,unimp -D build/logs/smoke-stock-display.log \
 	> build/logs/smoke-stock-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-stock-display.console
-	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=false' build/logs/smoke-stock-display.console
+	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=true' build/logs/smoke-stock-display.console
 	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: audio pcm selftest ok board=sf2000 sample0=2048 sample1=-2048' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-stock-display.log
@@ -533,7 +533,7 @@ smoke-gb300-display: build check-gb300-asd
 		-d guest_errors,unimp -D build/logs/smoke-gb300-display.log \
 	> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-gb300-display.console
-	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=false' build/logs/smoke-gb300-display.console
+	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=true' build/logs/smoke-gb300-display.console
 	grep -q 'sf2000: audio state selftest ok board=gb300' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: audio pcm selftest ok board=gb300 sample0=2048 sample1=-2048' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=gb300' build/logs/smoke-gb300-display.log
@@ -637,7 +637,7 @@ smoke-board-contract: build
 	grep -q '"return": "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 hw_period=0 hw_periods=0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "75"' build/logs/smoke-board-contract.console
 	grep -q '"return": "8"' build/logs/smoke-board-contract.console
-	grep -q 'pwm2_backlight_active=false' build/logs/smoke-board-contract.console
+	grep -q 'pwm2_backlight_active=true' build/logs/smoke-board-contract.console
 	grep -q '"return": "closed"' build/logs/smoke-board-contract.console
 	grep -q '"return": "true"' build/logs/smoke-board-contract.console
 	grep -q '"return": "32000"' build/logs/smoke-board-contract.console
@@ -676,6 +676,7 @@ smoke-board-contract: build
 	grep -q 'sf2000: audio state selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=sf2000' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: panel readback selftest ok board=sf2000 panel=0x00858552' build/logs/smoke-board-contract.log
+	grep -q 'sf2000: gma final-block selftest ok board=sf2000 sample=0xffffffff' build/logs/smoke-board-contract.log
 	grep -q 'sf2000: usb reset block selftest ok board=sf2000 usb0=0x00000070/0x00000099 usb1=0x00000070/0x00000099' build/logs/smoke-board-contract.log
 	grep -q 'usb0_power=0x00000070 usb1_power=0x00000070' build/logs/smoke-board-contract.console
 	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-board-contract.log

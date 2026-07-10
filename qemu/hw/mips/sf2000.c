@@ -685,8 +685,8 @@ static bool sf2000_pwm2_backlight_active(void)
     uint32_t pwm2_ctrl = 0;
 
     sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &pwm_clk_ctrl);
-    sf2000_mmio_get32(SF2000_PWM_BASE + 2u * SF2000_PWM_CH_STRIDE + 4u,
-                      &pwm2_ctrl);
+    sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
+                      2u * SF2000_PWM_CH_STRIDE + 4u, &pwm2_ctrl);
     return (pwm_clk_ctrl & (SF2000_PWM_CLKEN | SF2000_PWM_ENABLE)) ==
             (SF2000_PWM_CLKEN | SF2000_PWM_ENABLE) &&
            (pwm2_ctrl & SF2000_PWM_CH_ENABLE);
@@ -2328,7 +2328,8 @@ static void sf2000_pwm2_backlight_blank_selftest(void)
     saved_pixel = dst[0];
 
     memset(descriptor, 0, sizeof(descriptor));
-    stl_le_p(descriptor + 0, 0x00000060u); /* RGB565, CLUT off. */
+    /* RGB565, CLUT off, and bit 0 marks this as the final block. */
+    stl_le_p(descriptor + 0, 0x00000061u);
     stl_le_p(descriptor + 4, 0x00000000u);
     stl_le_p(descriptor + 8, 0x00000000u);
     stl_le_p(descriptor + 12, 0x00000000u);
@@ -2345,6 +2346,18 @@ static void sf2000_pwm2_backlight_blank_selftest(void)
     sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL, &saved_clk_ctrl);
     sf2000_mmio_get32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
                       2u * SF2000_PWM_CH_STRIDE + 4u, &saved_pwm2_ctrl);
+
+    (void)sf2000_gma_present_block(s, desc_addr, false);
+    old = dst[0];
+    if (old != 0xffffffffu) {
+        error_report("sf2000: gma final-block selftest failed board=%s pixel=0x%08x",
+                     profile->name, old);
+        goto restore;
+    }
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: gma final-block selftest ok board=%s sample=0x%08x\n",
+                  profile->name, old);
+
     sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_CLK_CTRL,
                       saved_clk_ctrl & ~(SF2000_PWM_CLKEN | SF2000_PWM_ENABLE));
     sf2000_mmio_set32(SF2000_PWM_BASE + SF2000_PWM_DIV_BASE +
@@ -5204,6 +5217,11 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         }
     } else if ((full_addr & ~0x80u) == 0x18808304) {
         sf2000_active_gma[(full_addr & 0x80u) ? 1 : 0] = value;
+        if (sf2000_trace_gma()) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: gma-doorbell layer=%u dmba=0x%08" PRIx64 "\n",
+                          (full_addr & 0x80u) ? 1 : 0, value);
+        }
         sf2000_gma_present(value);
     } else if (sf2000_uart_decode(full_addr, &uart_index, &uart_offset) &&
                uart_offset == SF2000_UART_RBR_THR) {
@@ -5589,9 +5607,6 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         return d6;
     }
 
-    if (mode == 0x06 && (d0 & 1)) {
-        return d6;
-    }
     scale_x = sample_w != width;
     scale_y = sample_h != height;
 
@@ -5714,6 +5729,24 @@ static void sf2000_lcd_update(void *opaque)
     int height = s->height ? s->height : SF2000_LCD_HEIGHT;
     int stride = s->stride ? s->stride : width * 2;
     int y;
+
+    /*
+     * GMA descriptors are continuously scanned by the HC15xx hardware.  The
+     * guest can update a framebuffer with CPU stores and cache maintenance
+     * without ringing the DMBA doorbell again.  Refresh active layers when
+     * QEMU asks the console for a new frame, just as the physical scanout does.
+     */
+    if (sf2000_active_gma[0]) {
+        sf2000_gma_present(sf2000_active_gma[0]);
+    }
+    if (sf2000_active_gma[1] &&
+        sf2000_active_gma[1] != sf2000_active_gma[0]) {
+        sf2000_gma_present(sf2000_active_gma[1]);
+    }
+    if (sf2000_active_gma[0] || sf2000_active_gma[1]) {
+        s->redraw = false;
+        return;
+    }
 
     if (!s->fb_base || !s->control) {
         return;
