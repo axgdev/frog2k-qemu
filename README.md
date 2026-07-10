@@ -410,6 +410,8 @@ Implemented:
 - UART0/UART1 line capture and interrupt modeling to the QEMU log.
 - A minimal SDIO command and DMA read path, backed by either a raw `IF_SD`
   image named `sd0` or a synthetic FAT probe card.
+- Active-low SD-card presence on GPIO L22, matching the board DTS and the
+  media exposed by the SDIO model.
 - GPIO keypad input through the L23/L24 shift-register contract, including
   stock launcher navigation from QEMU monitor/VNC key events.
 - GMA descriptor scanout for the stock launcher, including CLUT8 blocks,

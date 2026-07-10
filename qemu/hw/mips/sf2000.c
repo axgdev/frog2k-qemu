@@ -4822,6 +4822,8 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
                 break;
             }
         }
+        /* SD card detect is PINPAD_L22, active low on the SF2000 DTS. */
+        value &= ~BIT(22);
         value = sf2000_gpio_l_sample(value);
         value = sf2000_rf_gpio_l_sample(value);
         value >>= ((full_addr & 3u) * 8u);
