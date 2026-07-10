@@ -589,6 +589,7 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"pwm2-backlight-active"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-ctrl3c"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-fade90"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-dma"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-id"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-ports"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-ctl0"}}\n'; \
@@ -653,6 +654,7 @@ smoke-board-contract: build
 	grep -q '"return": "clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x0000ff41"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x008f0000"' build/logs/smoke-board-contract.console
+	grep -q '"return": "base=0x00000000 bytes=0 pos=0 active=false"' build/logs/smoke-board-contract.console
 	grep -q '"return": "true"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1d6b:0002"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1"' build/logs/smoke-board-contract.console

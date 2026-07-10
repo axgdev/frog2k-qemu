@@ -428,6 +428,13 @@ static uint32_t sf2000_audio_wave_phase;
 static uint32_t sf2000_audio_wave_step;
 static uint32_t sf2000_audio_volume;
 static uint32_t sf2000_audio_gain;
+static uint32_t sf2000_audio_dma_base;
+static uint32_t sf2000_audio_dma_bytes;
+static uint32_t sf2000_audio_dma_pos;
+static uint32_t sf2000_audio_snd_ctl08;
+static uint32_t sf2000_audio_snd_ctl0c;
+static uint32_t sf2000_audio_snd_ctl50;
+static bool sf2000_audio_dma_reported;
 
 static bool sf2000_audio_output_active(void)
 {
@@ -704,6 +711,17 @@ static char *sf2000_machine_audio_i2s_fade90_get(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x", sf2000_audio_i2s_fade90);
 }
 
+static char *sf2000_machine_audio_dma_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("base=0x%08x bytes=%u pos=%u active=%s",
+                           sf2000_audio_dma_base, sf2000_audio_dma_bytes,
+                           sf2000_audio_dma_pos,
+                           (sf2000_audio_snd_ctl08 & 1) &&
+                           (sf2000_audio_snd_ctl0c & 1) &&
+                           (sf2000_audio_snd_ctl50 & BIT(29)) ?
+                           "true" : "false");
+}
+
 static bool sf2000_machine_storage_selftest_raw_get(Object *obj, Error **errp)
 {
     return sf2000_storage_selftest_raw;
@@ -857,17 +875,41 @@ static void sf2000_audio_callback(void *opaque, int free)
             break;
         }
 
-        for (size_t i = 0; i < frames; i++) {
-            int16_t sample;
-            sample = sf2000_audio_render_sample();
+        if (sf2000_audio_dma_bytes &&
+            (sf2000_audio_snd_ctl08 & 1) &&
+            (sf2000_audio_snd_ctl0c & 1) &&
+            (sf2000_audio_snd_ctl50 & BIT(29))) {
+            size_t guest_bytes = frames * sizeof(int16_t);
+            size_t first = MIN(guest_bytes,
+                               sf2000_audio_dma_bytes - sf2000_audio_dma_pos);
 
-            sample_buf[i * channels] = sample;
+            cpu_physical_memory_read(sf2000_audio_dma_base +
+                                     sf2000_audio_dma_pos,
+                                     sample_buf, first);
+            if (first < guest_bytes) {
+                cpu_physical_memory_read(sf2000_audio_dma_base,
+                                         (uint8_t *)sample_buf + first,
+                                         guest_bytes - first);
+            }
             if (channels > 1) {
+                for (size_t i = frames; i-- > 0;) {
+                    int16_t sample = sample_buf[i];
+
+                    for (unsigned ch = 0; ch < channels; ch++) {
+                        sample_buf[i * channels + ch] = sample;
+                    }
+                }
+            }
+        } else {
+            for (size_t i = 0; i < frames; i++) {
+                int16_t sample = sf2000_audio_render_sample();
+
+                sample_buf[i * channels] = sample;
                 for (unsigned ch = 1; ch < channels; ch++) {
                     sample_buf[i * channels + ch] = sample;
                 }
+                sf2000_audio_wave_phase += sf2000_audio_wave_step;
             }
-            sf2000_audio_wave_phase += sf2000_audio_wave_step;
         }
 
         bytes = AUD_write(sf2000_audio_voice, sample_buf,
@@ -875,8 +917,17 @@ static void sf2000_audio_callback(void *opaque, int free)
         if (!bytes) {
             break;
         }
+        if (sf2000_audio_dma_bytes &&
+            (sf2000_audio_snd_ctl08 & 1) &&
+            (sf2000_audio_snd_ctl0c & 1) &&
+            (sf2000_audio_snd_ctl50 & BIT(29))) {
+            size_t guest_written = bytes / channels;
+
+            sf2000_audio_dma_pos =
+                (sf2000_audio_dma_pos + guest_written) % sf2000_audio_dma_bytes;
+        }
         free -= bytes;
-        if (bytes < frames * sizeof(int16_t) * 2) {
+        if (bytes < frames * sizeof(int16_t) * channels) {
             break;
         }
     }
@@ -4700,6 +4751,8 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         value = sf2000_adc_read(full_addr, size);
     } else if (sf2000_wdt_decode(full_addr)) {
         value = 0;
+    } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x38) {
+        value = sf2000_audio_dma_pos >> 4;
     } else if (full_addr >= 0x1884c010 && full_addr < 0x1884c020) {
         unsigned off = full_addr - 0x1884c010;
         value = sf2000_sdio_resp[off >> 2] >> ((off & 3) * 8);
@@ -4925,6 +4978,22 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                         sf2000_board_profile_spec()->audio_route,
                         full_addr, value);
         }
+    } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x30) {
+        sf2000_audio_dma_base = value & 0x1fffffffu;
+    } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x34) {
+        sf2000_audio_dma_bytes = (value & 0xffffu) << 4;
+        sf2000_audio_dma_pos = 0;
+    } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x38) {
+        sf2000_audio_dma_pos = ((value & 0xffffu) << 4);
+        if (sf2000_audio_dma_bytes) {
+            sf2000_audio_dma_pos %= sf2000_audio_dma_bytes;
+        }
+    } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x08) {
+        sf2000_audio_snd_ctl08 = value;
+    } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x0c) {
+        sf2000_audio_snd_ctl0c = value;
+    } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x50) {
+        sf2000_audio_snd_ctl50 = value;
     } else if (full_addr == SF2000_AUDIO_I2S_CTRL3C) {
         sf2000_audio_i2s_ctrl3c = value;
     } else if (full_addr == SF2000_AUDIO_I2S_FADE90) {
@@ -5060,6 +5129,14 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_sdio_pio_state = 0x04;
     } else if (full_addr == 0x1884c000 && (value & 1)) {
         sf2000_sdio_complete_cmd();
+    }
+
+    if (!sf2000_audio_dma_reported && sf2000_audio_dma_bytes &&
+        (sf2000_audio_snd_ctl08 & 1) && (sf2000_audio_snd_ctl0c & 1) &&
+        (sf2000_audio_snd_ctl50 & BIT(29))) {
+        sf2000_audio_dma_reported = true;
+        info_report("sf2000: audio guest DMA active base=0x%08x bytes=%u",
+                    sf2000_audio_dma_base, sf2000_audio_dma_bytes);
     }
 
     sf2000_update_irq();
@@ -5929,6 +6006,14 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_app_cmd = false;
     sf2000_sdio_bus_width = 1;
 
+    sf2000_audio_dma_base = 0;
+    sf2000_audio_dma_bytes = 0;
+    sf2000_audio_dma_pos = 0;
+    sf2000_audio_snd_ctl08 = 0;
+    sf2000_audio_snd_ctl0c = 0;
+    sf2000_audio_snd_ctl50 = 0;
+    sf2000_audio_dma_reported = false;
+
     cpu_reset(CPU(cpu));
 
     if (loaderparams.kernel_filename) {
@@ -6213,6 +6298,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_i2s_ctrl3c_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-fade90",
                                   sf2000_machine_audio_i2s_fade90_get, NULL);
+    object_class_property_add_str(oc, "audio-dma",
+                                  sf2000_machine_audio_dma_get, NULL);
     object_class_property_add_bool(oc, "storage-selftest-raw",
                                    sf2000_machine_storage_selftest_raw_get,
                                    sf2000_machine_storage_selftest_raw_set);
