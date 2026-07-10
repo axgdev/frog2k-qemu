@@ -2699,20 +2699,21 @@ static void sf2000_sdio_complete_cmd(void)
     case 16:
         sf2000_sdio_resp[0] = 0;
         break;
+    /* ACMD41 advertises CCS, so data command arguments are sector numbers. */
     case 17:
-        sf2000_sdio_dma_read(sf2000_sdio_arg >> 9);
+        sf2000_sdio_dma_read(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
     case 18:
-        sf2000_sdio_dma_read(sf2000_sdio_arg >> 9);
+        sf2000_sdio_dma_read(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
     case 24:
-        sf2000_sdio_dma_write(sf2000_sdio_arg >> 9);
+        sf2000_sdio_dma_write(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
     case 25:
-        sf2000_sdio_dma_write(sf2000_sdio_arg >> 9);
+        sf2000_sdio_dma_write(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
     default:
