@@ -409,6 +409,8 @@ static uint8_t sf2000_sdio_cmd;
 static uint32_t sf2000_sdio_resp[4];
 static uint32_t sf2000_sdio_dma_addr;
 static uint32_t sf2000_sdio_dma_len;
+static uint32_t sf2000_sdio_dma_wr_addr;
+static uint32_t sf2000_sdio_dma_wr_len;
 static bool sf2000_sdio_xfer_done;
 static bool sf2000_sdio_xfer_busy;
 static bool sf2000_sdio_irq_pending;
@@ -2496,6 +2498,26 @@ static void sf2000_sdio_dma_read(uint32_t lba)
     }
 }
 
+/*
+ * The HC15xx controller has separate DMA address/length register pairs per
+ * direction: 0x20/0x28 for card-to-memory reads and 0x24/0x2c for
+ * memory-to-card writes (confirmed by the unifrog source translation of
+ * libmmchosthc15.a, src_set_dma()).  Prefer the write-direction latch when it
+ * has been programmed; fall back to the read-direction registers so older
+ * guest code that reuses them keeps working.
+ */
+static uint32_t sf2000_sdio_dma_write_src(void)
+{
+    return sf2000_sdio_dma_wr_len ? sf2000_sdio_dma_wr_addr
+                                  : sf2000_sdio_dma_addr;
+}
+
+static uint32_t sf2000_sdio_dma_write_len(void)
+{
+    return sf2000_sdio_dma_wr_len ? sf2000_sdio_dma_wr_len
+                                  : sf2000_sdio_dma_len;
+}
+
 static bool sf2000_sdio_dma_write_image_bulk(uint32_t lba, uint32_t len,
                                              uint32_t *copied,
                                              MemTxResult *dma_result,
@@ -2508,7 +2530,8 @@ static bool sf2000_sdio_dma_write_image_bulk(uint32_t lba, uint32_t len,
     }
 
     buf = g_malloc(len);
-    *dma_result = dma_memory_read(&address_space_memory, sf2000_sdio_dma_addr,
+    *dma_result = dma_memory_read(&address_space_memory,
+                                  sf2000_sdio_dma_write_src(),
                                   buf, len, MEMTXATTRS_UNSPECIFIED);
     if (*dma_result != MEMTX_OK) {
         return true;
@@ -2526,7 +2549,8 @@ static void sf2000_sdio_dma_write(uint32_t lba)
     uint8_t sector[512];
     MemTxResult dma_result = MEMTX_OK;
     int blk_result = 0;
-    uint32_t len = sf2000_sdio_dma_len ? sf2000_sdio_dma_len : 512;
+    uint32_t prog_len = sf2000_sdio_dma_write_len();
+    uint32_t len = prog_len ? prog_len : 512;
     uint32_t copied = 0;
     uint32_t sectors = (len + sizeof(sector) - 1) / sizeof(sector);
     bool image_backed = sf2000_sdio_blk != NULL;
@@ -2545,7 +2569,7 @@ static void sf2000_sdio_dma_write(uint32_t lba)
         }
         memset(sector, 0, sizeof(sector));
         dma_result = dma_memory_read(&address_space_memory,
-                                     sf2000_sdio_dma_addr + copied,
+                                     sf2000_sdio_dma_write_src() + copied,
                                      sector, chunk, MEMTXATTRS_UNSPECIFIED);
         if (dma_result != MEMTX_OK) {
             break;
@@ -2567,8 +2591,35 @@ static void sf2000_sdio_dma_write(uint32_t lba)
     if (sf2000_trace_sdio()) {
         qemu_log_mask(LOG_UNIMP,
                       "sf2000: sdio-dma-write lba=%u sectors=%u src=0x%08x len=%u copied=%u image=%d dma=%d blk=%d\n",
-                      lba, sectors, sf2000_sdio_dma_addr, len, copied,
+                      lba, sectors, sf2000_sdio_dma_write_src(), len, copied,
                       image_backed, dma_result, blk_result);
+    }
+}
+
+static void sf2000_sdio_set_short_response(uint32_t response)
+{
+    /* HC15xx shifts the 32 response bits by one framing byte. */
+    sf2000_sdio_resp[0] = response << 8;
+    sf2000_sdio_resp[1] = response >> 24;
+}
+
+static void sf2000_sdio_dma_read_scr(void)
+{
+    static const uint8_t scr[8] = {
+        0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    uint32_t len = sf2000_sdio_dma_len;
+    MemTxResult result;
+
+    if (!len || len > sizeof(scr)) {
+        len = sizeof(scr);
+    }
+    result = dma_memory_write(&address_space_memory, sf2000_sdio_dma_addr,
+                              scr, len, MEMTXATTRS_UNSPECIFIED);
+    if (sf2000_trace_sdio()) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: sdio-dma-scr dst=0x%08x len=%u result=%d\n",
+                      sf2000_sdio_dma_addr, len, result);
     }
 }
 
@@ -2608,10 +2659,10 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_resp[3] = 0x33445566;
         break;
     case 3:
-        sf2000_sdio_resp[0] = 0x00010000; /* R6: RCA 1, status 0 in response-byte window. */
+        sf2000_sdio_set_short_response(0x00010000); /* R6: RCA 1. */
         break;
     case 8:
-        sf2000_sdio_resp[0] = 0xaa010000;
+        sf2000_sdio_set_short_response(0x000001aa);
         break;
     case 9:
         sf2000_sdio_resp[0] = 0x0009003f;
@@ -2621,7 +2672,7 @@ static void sf2000_sdio_complete_cmd(void)
         break;
     case 41:
         if (!is_app_cmd) {
-            sf2000_sdio_resp[0] = 0x00000900;
+            sf2000_sdio_set_short_response(0x00000900);
             break;
         }
         /*
@@ -2629,15 +2680,20 @@ static void sf2000_sdio_complete_cmd(void)
          * support because the goal is testing SF2000 firmware behavior rather
          * than SD-card electrical negotiation.
          */
-        sf2000_sdio_resp[0] = 0xffffffff; /* Permissive OCR: ready and all supported voltage bits. */
-        sf2000_sdio_resp[1] = 0xffffffff;
+        sf2000_sdio_set_short_response(0xc0ff8000);
+        break;
+    case 51:
+        if (is_app_cmd) {
+            sf2000_sdio_dma_read_scr();
+        }
+        sf2000_sdio_set_short_response(0x00000900);
         break;
     case 55:
-        sf2000_sdio_resp[0] = 0x20000000; /* APP_CMD accepted in response-byte window. */
+        sf2000_sdio_set_short_response(0x00000020); /* APP_CMD accepted. */
         sf2000_sdio_app_cmd = true;
         break;
     case 13:
-        sf2000_sdio_resp[0] = 0x00000900; /* Ready for data, transfer state. */
+        sf2000_sdio_set_short_response(0x00000900); /* Ready, transfer state. */
         break;
     case 7:
     case 16:
@@ -2660,13 +2716,23 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_resp[0] = 0;
         break;
     default:
-        sf2000_sdio_resp[0] = 0x00000900;
+        sf2000_sdio_set_short_response(0x00000900);
         break;
     }
 
     if (sf2000_sdio_cmd != 55) {
         sf2000_sdio_app_cmd = false;
     }
+
+    /*
+     * Raw bit 6 at 0x30 is the vendor command/data completion indication.
+     * The Linux poll path consumes it directly, while the stock driver
+     * normalizes it in src_get_and_clear_irq().
+     */
+    sf2000_sdio_xfer_done = true;
+    sf2000_sdio_xfer_busy = false;
+    sf2000_sdio_irq_pending = true;
+    sf2000_sdio_callback_pending = true;
 
     if (sf2000_trace_sdio()) {
         qemu_log_mask(LOG_UNIMP,
@@ -3150,7 +3216,7 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
     } else if (full_addr == 0x1884c00b) {
         value = sf2000_sdio_xfer_done ? 0x0c : 0x09;
     } else if (full_addr == 0x1884c030) {
-        value = sf2000_sdio_xfer_done ? 0x2c :
+        value = sf2000_sdio_xfer_done ? 0x6c :
                 (sf2000_sdio_xfer_busy ? 0x21 : 0x20);
         if (sf2000_trace_sdio()) {
             qemu_log_mask(LOG_UNIMP,
@@ -3294,6 +3360,13 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                                (((uint32_t)value << shift) & mask);
     }
 
+    if (sf2000_trace_sdio() &&
+        full_addr >= 0x1884c000 && full_addr < 0x1884c060) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: sdio-access write addr=0x%08lx value=0x%08lx size=%u\n",
+                      (unsigned long)full_addr, (unsigned long)value, size);
+    }
+
     if (sf2000_timer_decode(full_addr, &timer_index, &timer_offset)) {
         switch (timer_offset) {
         case 0:
@@ -3419,17 +3492,16 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             qemu_log_mask(LOG_UNIMP, "sf2000: sflash-cmd cmd=0x%02x\n",
                           sf2000_sflash_cmd);
         }
-    } else if (sf2000_trace_sdio() &&
-               full_addr >= 0x1884c000 && full_addr < 0x1884c060) {
-        qemu_log_mask(LOG_UNIMP,
-                      "sf2000: sdio-access write addr=0x%08lx value=0x%08lx size=%u\n",
-                      (unsigned long)full_addr, (unsigned long)value, size);
     } else if (full_addr == 0x1884c004) {
         sf2000_sdio_arg = value;
     } else if (full_addr == 0x1884c002) {
         sf2000_sdio_cmd = value & 0x3f;
     } else if (full_addr == 0x1884c020) {
         sf2000_sdio_dma_addr = value;
+    } else if (full_addr == 0x1884c024) {
+        sf2000_sdio_dma_wr_addr = value;
+    } else if (full_addr == 0x1884c02c) {
+        sf2000_sdio_dma_wr_len = value;
     } else if (full_addr == 0x1884c028) {
         sf2000_sdio_dma_len = value;
         if (sf2000_trace_sdio()) {
@@ -4277,6 +4349,20 @@ static void sf2000_cpu_reset(void *opaque)
 
     sf2000_wdt_count = 0;
     sf2000_wdt_disable();
+
+    sf2000_sdio_arg = 0;
+    sf2000_sdio_cmd = 0;
+    memset(sf2000_sdio_resp, 0, sizeof(sf2000_sdio_resp));
+    sf2000_sdio_dma_addr = 0;
+    sf2000_sdio_dma_len = 0;
+    sf2000_sdio_dma_wr_addr = 0;
+    sf2000_sdio_dma_wr_len = 0;
+    sf2000_sdio_xfer_done = false;
+    sf2000_sdio_xfer_busy = false;
+    sf2000_sdio_irq_pending = false;
+    sf2000_sdio_callback_pending = false;
+    sf2000_sdio_app_cmd = false;
+    sf2000_sdio_bus_width = 1;
 
     cpu_reset(CPU(cpu));
 
