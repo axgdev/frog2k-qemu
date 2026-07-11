@@ -3202,6 +3202,51 @@ static void sf2000_ge_rgb16_blit(uint32_t dst, uint32_t dst_pitch,
     g_free(image);
 }
 
+static void sf2000_ge_rgb16_stretch(uint32_t dst, uint32_t dst_pitch,
+                                    uint32_t src, uint32_t src_pitch,
+                                    uint32_t dst_wh, uint32_t src_wh)
+{
+    uint32_t dst_width = dst_wh & 0xfff;
+    uint32_t dst_height = dst_wh >> 16 & 0xfff;
+    uint32_t src_width = src_wh & 0xfff;
+    uint32_t src_height = src_wh >> 16 & 0xfff;
+    uint16_t *src_image;
+    uint16_t *dst_line;
+    uint32_t x;
+    uint32_t y;
+
+    if (!dst || !src || !dst_pitch || !src_pitch || !dst_width ||
+        !dst_height || !src_width || !src_height) {
+        return;
+    }
+    src_image = g_new(uint16_t, (size_t)src_width * src_height);
+    dst_line = g_new(uint16_t, dst_width);
+    for (y = 0; y < src_height; y++) {
+        if (address_space_read(&address_space_memory, src + y * src_pitch,
+                               MEMTXATTRS_UNSPECIFIED,
+                               src_image + (size_t)y * src_width,
+                               src_width * 2u) != MEMTX_OK) {
+            g_free(dst_line);
+            g_free(src_image);
+            return;
+        }
+    }
+    for (y = 0; y < dst_height; y++) {
+        uint32_t source_y = (uint64_t)y * src_height / dst_height;
+
+        for (x = 0; x < dst_width; x++) {
+            uint32_t source_x = (uint64_t)x * src_width / dst_width;
+
+            dst_line[x] = src_image[(size_t)source_y * src_width + source_x];
+        }
+        address_space_write(&address_space_memory, dst + y * dst_pitch,
+                            MEMTXATTRS_UNSPECIFIED, dst_line,
+                            dst_width * 2u);
+    }
+    g_free(dst_line);
+    g_free(src_image);
+}
+
 static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
 {
     uint32_t dst;
@@ -3220,6 +3265,13 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
         sf2000_ge_rgb16_blit(node[2], (node[3] & 0xfff) * 2u,
                              node[4], (node[5] & 0xfff) * 2u,
                              node[6], node[7], node[8]);
+        return;
+    }
+    if (words == 22 && node[0] == 0x0206870f &&
+        node[1] == 0x00a03009) {
+        sf2000_ge_rgb16_stretch(node[2], (node[3] & 0xfff) * 2u,
+                                node[6], (node[7] & 0xfff) * 2u,
+                                node[9], node[12]);
         return;
     }
     if (words < 26 || node[0] != 0x0201ffff) {
