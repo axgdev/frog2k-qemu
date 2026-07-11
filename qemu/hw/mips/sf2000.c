@@ -3138,6 +3138,70 @@ static void sf2000_ge_memcpy(uint32_t dst, uint32_t src, size_t len)
     g_free(buf);
 }
 
+static void sf2000_ge_rgb16_fill(uint32_t dst, uint32_t pitch,
+                                 uint32_t xy, uint32_t wh, uint16_t color)
+{
+    uint32_t x = xy & 0xfff;
+    uint32_t y = xy >> 16 & 0xfff;
+    uint32_t width = wh & 0xfff;
+    uint32_t height = wh >> 16 & 0xfff;
+    uint16_t *line;
+    uint32_t row;
+    uint32_t column;
+
+    if (!dst || !pitch || !width || !height || width > 4095) {
+        return;
+    }
+    line = g_new(uint16_t, width);
+    for (column = 0; column < width; column++) {
+        line[column] = cpu_to_le16(color);
+    }
+    for (row = 0; row < height; row++) {
+        address_space_write(&address_space_memory,
+                            dst + (y + row) * pitch + x * 2u,
+                            MEMTXATTRS_UNSPECIFIED, line, width * 2u);
+    }
+    g_free(line);
+}
+
+static void sf2000_ge_rgb16_blit(uint32_t dst, uint32_t dst_pitch,
+                                 uint32_t src, uint32_t src_pitch,
+                                 uint32_t dst_xy, uint32_t wh,
+                                 uint32_t src_xy)
+{
+    uint32_t dx = dst_xy & 0xfff;
+    uint32_t dy = dst_xy >> 16 & 0xfff;
+    uint32_t sx = src_xy & 0xfff;
+    uint32_t sy = src_xy >> 16 & 0xfff;
+    uint32_t width = wh & 0xfff;
+    uint32_t height = wh >> 16 & 0xfff;
+    size_t line_size = (size_t)width * 2u;
+    uint8_t *image;
+    uint32_t row;
+
+    if (!dst || !src || !dst_pitch || !src_pitch || !width || !height) {
+        return;
+    }
+    image = g_malloc(line_size * height);
+    for (row = 0; row < height; row++) {
+        if (address_space_read(&address_space_memory,
+                               src + (sy + row) * src_pitch + sx * 2u,
+                               MEMTXATTRS_UNSPECIFIED,
+                               image + row * line_size,
+                               line_size) != MEMTX_OK) {
+            g_free(image);
+            return;
+        }
+    }
+    for (row = 0; row < height; row++) {
+        address_space_write(&address_space_memory,
+                            dst + (dy + row) * dst_pitch + dx * 2u,
+                            MEMTXATTRS_UNSPECIFIED,
+                            image + row * line_size, line_size);
+    }
+    g_free(image);
+}
+
 static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
 {
     uint32_t dst;
@@ -3147,6 +3211,17 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
     uint32_t height;
     size_t len;
 
+    if (words == 14 && node[0] == 0x02008367 && node[1] == 0x00a00003) {
+        sf2000_ge_rgb16_fill(node[2], (node[3] & 0xfff) * 2u,
+                             node[10], node[11], node[6]);
+        return;
+    }
+    if (words == 9 && node[0] == 0x02000307 && node[1] == 0x00000002) {
+        sf2000_ge_rgb16_blit(node[2], (node[3] & 0xfff) * 2u,
+                             node[4], (node[5] & 0xfff) * 2u,
+                             node[6], node[7], node[8]);
+        return;
+    }
     if (words < 26 || node[0] != 0x0201ffff) {
         return;
     }
