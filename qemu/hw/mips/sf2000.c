@@ -5143,6 +5143,14 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     unsigned irc_offset;
     unsigned i;
 
+    if (sf2000_trace_gma() && full_addr >= SF2000_GMA_BASE &&
+        full_addr < SF2000_GMA_BASE + 0x1000) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: gma-reg-write addr=0x%08" HWADDR_PRIx
+                      " size=%u value=0x%08" PRIx64 "\n",
+                      full_addr, size, value);
+    }
+
     for (i = 0; i < ARRAY_SIZE(sf2000_regs); i++) {
         if (sf2000_regs[i].valid && sf2000_regs[i].addr == (full_addr & ~3u)) {
             old_value = sf2000_regs[i].value;
