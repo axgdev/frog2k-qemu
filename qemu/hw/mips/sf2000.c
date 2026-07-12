@@ -3474,7 +3474,13 @@ static void sf2000_ge_complete_queue(void)
     }
 
     sf2000_mmio_set32(SF2000_GE_STATUS, 0);
-    sf2000_mmio_set32(SF2000_GE_HQ_FIRST, last);
+    /*
+     * HQ_FIRST is the consumer pointer.  The inclusive HQ_LAST word has
+     * already been consumed, so hardware advances FIRST to the following
+     * word.  Keeping it on LAST hid Linux drivers which incorrectly rewound
+     * the same node for every frame instead of extending the vendor DMA ring.
+     */
+    sf2000_mmio_set32(SF2000_GE_HQ_FIRST, last + sizeof(uint32_t));
 
     /*
      * The GMA layer scans descriptor chains continuously on hardware. Stock
