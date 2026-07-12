@@ -1158,6 +1158,7 @@ struct SF2000LCDState {
     bool panel_vsync_unconnected_logged;
     bool panel_ramwr_handoff_logged;
     bool panel_ramctrl_handoff_logged;
+    bool panel_ramctrl_explicit;
     bool panel_rgb_handoff_synchronized;
     bool panel_rgb_handoff_order_logged;
 };
@@ -4794,6 +4795,7 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
             s->panel_ramctrl[s->panel_ramctrl_count++] = value & 0xff;
         }
         if (s->panel_ramctrl_count == ARRAY_SIZE(s->panel_ramctrl)) {
+            s->panel_ramctrl_explicit = true;
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: panel RAMCTRL access=%s display=%s value=%02x:%02x\n",
                           (s->panel_ramctrl[0] & BIT(4)) ? "RGB" : "MCU",
@@ -4877,6 +4879,7 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_ramctrl[0] = 0x00;
 		s->panel_ramctrl[1] = 0xf0;
 		s->panel_ramctrl_count = 0;
+		s->panel_ramctrl_explicit = false;
 		s->panel_ramctrl_handoff_logged = false;
 		s->panel_rgb_handoff_synchronized = false;
 		s->panel_rgb_handoff_order_logged = false;
@@ -5542,8 +5545,34 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                    (sf2000_regs[i].value & BIT(1))) {
             sf2000_ge_complete_queue();
         }
+    } else if ((full_addr & ~0x80u) == 0x18808350 && !(value & BIT(0))) {
+        unsigned layer = (full_addr & 0x80u) ? 1 : 0;
+        uint32_t ctl = 0;
+        uint32_t dmba = 0;
+
+        /* Clearing UPDATE_MASK commits the staged layer state. */
+        if (sf2000_lcd && sf2000_lcd->vou_latch_stage >= 10) {
+            sf2000_mmio_get32(0x18808300 + layer * 0x80u, &ctl);
+            sf2000_mmio_get32(0x18808304 + layer * 0x80u, &dmba);
+            sf2000_mmio_set32(0x18808b00 + layer * 0x80u, ctl);
+            sf2000_mmio_set32(0x18808b04 + layer * 0x80u, dmba);
+        }
     } else if ((full_addr & ~0x80u) == 0x18808304) {
-        sf2000_active_gma[(full_addr & 0x80u) ? 1 : 0] = value;
+        unsigned layer = (full_addr & 0x80u) ? 1 : 0;
+        uint32_t ctl = 0;
+
+        sf2000_active_gma[layer] = value;
+        /*
+         * 0x300/0x304 are the software staging registers; the HC15 exposes
+         * the frame-boundary-latched copies at +0x800.  Model that latch once
+         * VOU has completed its timing sequence so guests can distinguish a
+         * queued descriptor from a raster which is safe to hand to a panel.
+         */
+        if (sf2000_lcd && sf2000_lcd->vou_latch_stage >= 10) {
+            sf2000_mmio_get32(0x18808300 + layer * 0x80u, &ctl);
+            sf2000_mmio_set32(0x18808b00 + layer * 0x80u, ctl);
+            sf2000_mmio_set32(0x18808b04 + layer * 0x80u, value);
+        }
         if (sf2000_trace_gma()) {
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: gma-doorbell layer=%u dmba=0x%08" PRIx64 "\n",
@@ -5899,7 +5928,9 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
-    if (s->vou_setup_seen && s->panel_cmd == 0x2c) {
+    if (s->vou_setup_seen && s->panel_ramctrl_explicit &&
+        s->panel_rgb_handoff_synchronized &&
+        s->panel_cmd == 0x2c) {
         sf2000_vou_present_unlatched_background(s);
         if (!s->panel_ramwr_handoff_logged) {
             s->panel_ramwr_handoff_logged = true;
@@ -5916,13 +5947,12 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     if (s->vou_setup_seen &&
         (!(s->panel_ramctrl[0] & BIT(4)) ||
          (s->panel_ramctrl[0] & 3) != 1)) {
-        sf2000_vou_present_unlatched_background(s);
-        if (!s->panel_ramctrl_handoff_logged) {
-            s->panel_ramctrl_handoff_logged = true;
-            qemu_log_mask(LOG_GUEST_ERROR,
-                          "sf2000: GMA scanout while panel RAMCTRL remains MCU-owned value=%02x:%02x\n",
-                          s->panel_ramctrl[0], s->panel_ramctrl[1]);
-        }
+        /*
+         * It is valid, and required on cold hardware, to arm VOU/GMA while
+         * the shared pins still serve the MCU interface.  The raster is not
+         * visible until RAMCTRL transfers ownership, but it must already be
+         * frame-boundary-latched at that moment.
+         */
         return 0;
     }
     if (s->vou_setup_seen && (s->panel_ramctrl[0] & 0x13) == 0x11 &&
