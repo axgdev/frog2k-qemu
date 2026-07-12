@@ -4740,26 +4740,33 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
 
 static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 {
-    if (s->panel_rs) {
+	bool trace_command;
+
+	if (s->panel_rs) {
         sf2000_panel_commit_arg(s, value);
         return;
     }
 
-    s->panel_cmd = value & 0xff;
-    s->panel_arg_count = 0;
-    s->panel_cmd_count++;
-    if (s->panel_cmd_count <= 64 || s->panel_cmd == 0x2c) {
-        qemu_log_mask(LOG_UNIMP,
+	s->panel_cmd = value & 0xff;
+	s->panel_arg_count = 0;
+	s->panel_cmd_count++;
+	/* RAMWR is issued on every TE edge; retain useful early/periodic traces
+	 * without filling the QEMU log at the panel refresh rate. */
+	trace_command = s->panel_cmd_count <= 64 ||
+		(s->panel_cmd == 0x2c && (s->panel_cmd_count % 60u) == 0);
+	if (trace_command) {
+		qemu_log_mask(LOG_UNIMP,
                       "sf2000: panel-cmd cmd=0x%02x raw=0x%04x count=%u\n",
                       s->panel_cmd, value, s->panel_cmd_count);
-    }
-    if (s->panel_cmd == 0x2c) {
+	}
+	if (s->panel_cmd == 0x2c) {
         s->panel_x = s->panel_x0;
         s->panel_y = s->panel_y0;
-        qemu_log_mask(LOG_UNIMP,
-                      "sf2000: panel-ramwr x=%u..%u y=%u..%u pixels=%u\n",
-                      s->panel_x0, s->panel_x1, s->panel_y0, s->panel_y1,
-                      s->panel_pixel_count);
+		if (trace_command)
+			qemu_log_mask(LOG_UNIMP,
+				      "sf2000: panel-ramwr x=%u..%u y=%u..%u pixels=%u\n",
+				      s->panel_x0, s->panel_x1, s->panel_y0, s->panel_y1,
+				      s->panel_pixel_count);
         s->panel_readback_active = false;
     } else if (sf2000_panel_is_readback_cmd(s->panel_cmd)) {
         sf2000_panel_prepare_readback(s);
@@ -4918,6 +4925,17 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         }
         if (sf2000_sdio_irq_pending) {
             value |= SF2000_SDIO_IRQ;
+            /*
+             * HC15xx SDIO completion is an edge at the cascaded interrupt
+             * controller.  The Linux HC15 driver consumes the completion
+             * status in the same interrupt transaction; retaining this bit
+             * after the aggregate status read turns it into a level IRQ and
+             * traps the generic Hichip irqchip in EIRQ3 forever when the
+             * userspace screen starts.  The command/DMA state remains
+             * available through the SDIO registers, so only the synthetic
+             * aggregate edge is consumed here.
+             */
+            sf2000_sdio_irq_pending = false;
         }
         /*
          * Before TIMER5 is programmed, the model injects a synthetic scheduler
@@ -4960,6 +4978,28 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
             if (sf2000_regs[i].valid && sf2000_regs[i].addr == SF2000_GPIO_L_IN) {
                 value = sf2000_regs[i].value;
                 break;
+            }
+        }
+        /*
+         * L08 is the panel's TE input.  Linux's userspace screen polls this
+         * pin after taking ownership from the kernel GPIO IRQ, so keep the
+         * electrical level moving even when the interrupt enable bit is
+         * intentionally masked.  The aggregate IRQ remains gated by
+         * sf2000_gpio_l_vsync_enabled(); this only models the observable pad.
+         */
+        if (sf2000_lcd) {
+            uint32_t panel_te_hz = sf2000_lcd->panel_te_hz;
+            int64_t half_period;
+
+            if (!panel_te_hz) {
+                panel_te_hz = 60;
+            }
+            half_period = NANOSECONDS_PER_SECOND /
+                ((int64_t)panel_te_hz * 2);
+            if ((qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / half_period) & 1) {
+                value |= SF2000_GPIO_L08;
+            } else {
+                value &= ~SF2000_GPIO_L08;
             }
         }
         /* SD card detect is PINPAD_L22, active low on the SF2000 DTS. */
