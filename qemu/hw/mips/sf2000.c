@@ -1152,6 +1152,7 @@ struct SF2000LCDState {
     uint8_t vou_latch_stage;
     bool vou_setup_seen;
     bool vou_unlatched_logged;
+    bool panel_vsync_unconnected_logged;
 };
 
 static SF2000LCDState *sf2000_lcd;
@@ -5810,12 +5811,24 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     bool backlight_active;
     unsigned phase = 32;
     int y;
+    uint32_t rgb_pinmux = 0;
 
     if (!s || !dmba_addr) {
         return 0;
     }
     if (s->vou_latch_stage < 10 && s->vou_setup_seen) {
         sf2000_vou_present_unlatched_background(s);
+        return 0;
+    }
+    if (sf2000_mmio_get32(0x188004a8, &rgb_pinmux) &&
+        ((rgb_pinmux >> 8) & 0xff) != 6) {
+        sf2000_vou_present_unlatched_background(s);
+        if (!s->panel_vsync_unconnected_logged) {
+            s->panel_vsync_unconnected_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: GMA scanout with panel VSYNC disconnected pinmux=0x%08x\n",
+                          rgb_pinmux);
+        }
         return 0;
     }
     if (address_space_read(&address_space_memory, dmba_addr,
