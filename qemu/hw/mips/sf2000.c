@@ -1149,6 +1149,9 @@ struct SF2000LCDState {
     uint8_t gma_palette[1024];
     uint32_t gma_palette_addr;
     bool gma_palette_valid;
+    uint8_t vou_latch_stage;
+    bool vou_setup_seen;
+    bool vou_unlatched_logged;
 };
 
 static SF2000LCDState *sf2000_lcd;
@@ -1159,6 +1162,75 @@ static void sf2000_gma_present(uint32_t dmba_addr);
 static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
                                          bool dump_frame);
 static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
+
+static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
+{
+    SF2000LCDState *s = sf2000_lcd;
+
+    if (!s) {
+        return;
+    }
+    if (addr == 0x18808190 && value == 0x00800100) {
+        s->vou_setup_seen = true;
+    }
+
+    /*
+     * libviddrv's RGB setup is an edge-triggered state machine, not merely a
+     * register file.  Track the smallest ordered set of transitions proven by
+     * the stock trace so QEMU cannot hide a guest which writes only the final
+     * values (physical hardware displays VPO's constant background then).
+     */
+    switch (s->vou_latch_stage) {
+    case 0:
+        if (addr == 0x18808000 && value == 0x00000011) {
+            s->vou_latch_stage = 1;
+        }
+        break;
+    case 1:
+        if (addr == 0x18808000 && value == 0x00000001) {
+            s->vou_latch_stage = 2;
+        }
+        break;
+    case 2:
+        if (addr == 0x1880807c && value == 0x00000000) {
+            s->vou_latch_stage = 3;
+        }
+        break;
+    case 3:
+        if (addr == 0x1880807c && value == 0x00010000) {
+            s->vou_latch_stage = 4;
+        }
+        break;
+    case 4:
+        if (addr == 0x18808080 && value == 0x00030702) {
+            s->vou_latch_stage = 5;
+        }
+        break;
+    case 5:
+        if (addr == 0x18800078 && (value & 0x00083700) == 0x00083700) {
+            s->vou_latch_stage = 6;
+        }
+        break;
+    case 6:
+        if (addr == 0x18800078 && (value & 0x00083700) == 0x00003700) {
+            s->vou_latch_stage = 7;
+        }
+        break;
+    case 7:
+        if (addr == 0x18808000 && value == 0x00000015) {
+            s->vou_latch_stage = 8;
+        }
+        break;
+    case 8:
+        if (addr == 0x188081ec && value == 0x00050000) {
+            s->vou_latch_stage = 9;
+            info_report("sf2000: VOU RGB compositor latch complete");
+        }
+        break;
+    default:
+        break;
+    }
+}
 
 static uint64_t sf2000_cpu_hz(void)
 {
@@ -5210,6 +5282,11 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_regs[i].value = (old_value & ~mask) |
                                (((uint32_t)value << shift) & mask);
     }
+    if (size == 4 && ((full_addr >= 0x18808000 &&
+                       full_addr <= 0x188081ec) ||
+                      full_addr == 0x18800078)) {
+        sf2000_vou_track_latch(full_addr, value);
+    }
     if (i != ARRAY_SIZE(sf2000_regs)) {
         if ((full_addr & ~3u) == SF2000_IRQ_ENABLE1) {
             sf2000_irq_enable1 = sf2000_regs[i].value;
@@ -5676,6 +5753,39 @@ static uint32_t sf2000_argb8888_to_surface(uint32_t pix)
     return 0xff000000u | (pix & 0x00ffffffu);
 }
 
+static void sf2000_vou_present_unlatched_background(SF2000LCDState *s)
+{
+    DisplaySurface *surface = qemu_console_surface(s->con);
+    int y;
+
+    if (surface_bits_per_pixel(surface) != 32 ||
+        surface_width(surface) != SF2000_LCD_WIDTH ||
+        surface_height(surface) != SF2000_LCD_HEIGHT) {
+        qemu_console_resize(s->con, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
+        surface = qemu_console_surface(s->con);
+    }
+    if (surface_bits_per_pixel(surface) != 32) {
+        return;
+    }
+    for (y = 0; y < SF2000_LCD_HEIGHT; y++) {
+        uint32_t *dst = (uint32_t *)(surface_data(surface) +
+                        y * surface_stride(surface));
+        int x;
+
+        for (x = 0; x < SF2000_LCD_WIDTH; x++) {
+            /* Visually distinguish the physical VPO fallback from scanout. */
+            dst[x] = 0xff800080u;
+        }
+    }
+    dpy_gfx_update(s->con, 0, 0, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
+    if (!s->vou_unlatched_logged) {
+        s->vou_unlatched_logged = true;
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: GMA doorbell before VOU RGB latch stage=%u; displaying VPO background\n",
+                      s->vou_latch_stage);
+    }
+}
+
 static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
                                          bool dump_frame)
 {
@@ -5696,6 +5806,10 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     int y;
 
     if (!s || !dmba_addr) {
+        return 0;
+    }
+    if (s->vou_latch_stage < 9 && s->vou_setup_seen) {
+        sf2000_vou_present_unlatched_background(s);
         return 0;
     }
     if (address_space_read(&address_space_memory, dmba_addr,

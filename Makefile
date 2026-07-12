@@ -505,6 +505,8 @@ smoke-stock-display: build
 	grep -q 'sf2000: usb link state selftest ok board=sf2000' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: usb phy snapshot selftest ok board=sf2000 usb0=0x00570740/0x00000010 usb1=0x00570740/0x00000010' build/logs/smoke-stock-display.log
 	grep -q 'sf2000: audio setup route=sf2000-default-amp' build/logs/smoke-stock-display.console
+	grep -q 'sf2000: VOU RGB compositor latch complete' build/logs/smoke-stock-display.console
+	! grep -q 'GMA doorbell before VOU RGB latch' build/logs/smoke-stock-display.log
 	grep -q 'gma-present .*mode=12' build/logs/smoke-stock-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-stock-display.log
 
