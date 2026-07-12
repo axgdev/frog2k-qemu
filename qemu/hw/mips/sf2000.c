@@ -1352,6 +1352,7 @@ static uint8_t sf2000_rf_response_bit;
 static unsigned sf2000_gma_dump_count;
 static unsigned sf2000_ge_queue_dump_count;
 static uint32_t sf2000_active_gma[2];
+static bool sf2000_gma_mask_armed[2];
 static const char *sf2000_last_pc_landmark;
 static unsigned sf2000_pc_sample_count;
 static uint32_t sf2000_last_call_pc;
@@ -5545,34 +5546,41 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                    (sf2000_regs[i].value & BIT(1))) {
             sf2000_ge_complete_queue();
         }
-    } else if ((full_addr & ~0x80u) == 0x18808350 && !(value & BIT(0))) {
+    } else if ((full_addr & ~0x80u) == 0x18808350) {
         unsigned layer = (full_addr & 0x80u) ? 1 : 0;
-        uint32_t ctl = 0;
-        uint32_t dmba = 0;
+        uint32_t masks[2] = { 0, 0 };
+        unsigned bank;
 
-        /* Clearing UPDATE_MASK commits the staged layer state. */
-        if (sf2000_lcd && sf2000_lcd->vou_latch_stage >= 10) {
-            sf2000_mmio_get32(0x18808300 + layer * 0x80u, &ctl);
-            sf2000_mmio_get32(0x18808304 + layer * 0x80u, &dmba);
-            sf2000_mmio_set32(0x18808b00 + layer * 0x80u, ctl);
-            sf2000_mmio_set32(0x18808b04 + layer * 0x80u, dmba);
+        if (value & BIT(0)) {
+            sf2000_gma_mask_armed[layer] = true;
+        } else if (sf2000_lcd && sf2000_lcd->vou_latch_stage >= 10) {
+            sf2000_mmio_get32(0x18808350, &masks[0]);
+            sf2000_mmio_get32(0x188083d0, &masks[1]);
+            /*
+             * HC15 stock firmware arms both update-mask banks around every
+             * primary transaction.  The second release commits the complete
+             * compositor state; treating 0x350 alone as HC16-style layer
+             * state lets an incomplete guest look healthy in emulation.
+             */
+            if (!(masks[0] & BIT(0)) && !(masks[1] & BIT(0)) &&
+                sf2000_gma_mask_armed[0] && sf2000_gma_mask_armed[1]) {
+                for (bank = 0; bank < 2; bank++) {
+                    uint32_t ctl = 0;
+                    uint32_t dmba = 0;
+
+                    sf2000_mmio_get32(0x18808300 + bank * 0x80u, &ctl);
+                    sf2000_mmio_get32(0x18808304 + bank * 0x80u, &dmba);
+                    sf2000_mmio_set32(0x18808b00 + bank * 0x80u, ctl);
+                    sf2000_mmio_set32(0x18808b04 + bank * 0x80u, dmba);
+                }
+                sf2000_gma_mask_armed[0] = false;
+                sf2000_gma_mask_armed[1] = false;
+            }
         }
     } else if ((full_addr & ~0x80u) == 0x18808304) {
         unsigned layer = (full_addr & 0x80u) ? 1 : 0;
-        uint32_t ctl = 0;
 
         sf2000_active_gma[layer] = value;
-        /*
-         * 0x300/0x304 are the software staging registers; the HC15 exposes
-         * the frame-boundary-latched copies at +0x800.  Model that latch once
-         * VOU has completed its timing sequence so guests can distinguish a
-         * queued descriptor from a raster which is safe to hand to a panel.
-         */
-        if (sf2000_lcd && sf2000_lcd->vou_latch_stage >= 10) {
-            sf2000_mmio_get32(0x18808300 + layer * 0x80u, &ctl);
-            sf2000_mmio_set32(0x18808b00 + layer * 0x80u, ctl);
-            sf2000_mmio_set32(0x18808b04 + layer * 0x80u, value);
-        }
         if (sf2000_trace_gma()) {
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: gma-doorbell layer=%u dmba=0x%08" PRIx64 "\n",
@@ -6656,6 +6664,8 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_bus_width = 1;
     sf2000_last_unifrog_trace_count = 0;
     sf2000_last_unifrog_trace_valid = false;
+    memset(sf2000_active_gma, 0, sizeof(sf2000_active_gma));
+    memset(sf2000_gma_mask_armed, 0, sizeof(sf2000_gma_mask_armed));
 
     memset(sf2000_timer_cnt, 0, sizeof(sf2000_timer_cnt));
     memset(sf2000_timer_aim, 0, sizeof(sf2000_timer_aim));
