@@ -5641,6 +5641,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
 {
     DisplaySurface *surface;
     uint8_t header[40];
+    uint8_t scaler_table[0x200];
     uint8_t *linebuf;
     uint8_t *linebuf_alloc = NULL;
     bool have_palette = false;
@@ -5649,7 +5650,9 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     uint32_t sample_w, sample_h;
     uint32_t width, height, bpp;
     bool scale_x, scale_y;
+    bool scaler_coefficients_valid = true;
     bool backlight_active;
+    unsigned phase = 32;
     int y;
 
     if (!s || !dmba_addr) {
@@ -5744,6 +5747,34 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
 
     scale_x = sample_w != width;
     scale_y = sample_h != height;
+
+    /*
+     * HC15 scaled GMA blocks carry 32 two-word filter phases at descriptor
+     * offsets 0x40..0x23f.  Treating source/output geometry alone as enough
+     * made QEMU render Linux descriptors which physical hardware reduced to
+     * the VPO background because their enabled scaler table was all zero.
+     */
+    if ((d0 & (1u << 2)) && (scale_x || scale_y)) {
+        if (address_space_read(&address_space_memory, dmba_addr + 0x40,
+                               MEMTXATTRS_UNSPECIFIED, scaler_table,
+                               sizeof(scaler_table)) != MEMTX_OK) {
+            scaler_coefficients_valid = false;
+        } else {
+            for (phase = 0; phase < 32; phase++) {
+                if (!ldl_le_p(scaler_table + phase * 16) &&
+                    !ldl_le_p(scaler_table + phase * 16 + 4)) {
+                    scaler_coefficients_valid = false;
+                    break;
+                }
+            }
+        }
+        if (!scaler_coefficients_valid) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: gma-present missing scaler coefficients dmba=0x%08x phase=%u\n",
+                          dmba_addr, phase);
+            return d6;
+        }
+    }
 
     surface = qemu_console_surface(s->con);
     if (surface_bits_per_pixel(surface) != 32 ||
