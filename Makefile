@@ -507,6 +507,7 @@ smoke-stock-display: build
 	grep -q 'sf2000: audio setup route=sf2000-default-amp' build/logs/smoke-stock-display.console
 	grep -q 'sf2000: VOU RGB compositor latch complete' build/logs/smoke-stock-display.console
 	! grep -q 'GMA doorbell before VOU RGB latch' build/logs/smoke-stock-display.log
+	! grep -q 'GMA scanout while panel RAMCTRL remains MCU-owned' build/logs/smoke-stock-display.log
 	grep -q 'gma-present .*mode=12' build/logs/smoke-stock-display.log
 	grep -q 'gma-present .*mode=6' build/logs/smoke-stock-display.log
 
