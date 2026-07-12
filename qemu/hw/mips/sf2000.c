@@ -1158,6 +1158,8 @@ struct SF2000LCDState {
     bool panel_vsync_unconnected_logged;
     bool panel_ramwr_handoff_logged;
     bool panel_ramctrl_handoff_logged;
+    bool panel_rgb_handoff_synchronized;
+    bool panel_rgb_handoff_order_logged;
 };
 
 static SF2000LCDState *sf2000_lcd;
@@ -4798,6 +4800,17 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
                           (s->panel_ramctrl[0] & 3) == 1 ? "RGB" :
                           (s->panel_ramctrl[0] & 3) == 2 ? "VSYNC" : "MCU",
                           s->panel_ramctrl[0], s->panel_ramctrl[1]);
+            if ((s->panel_ramctrl[0] & 0x13) == 0x11) {
+                s->panel_rgb_handoff_synchronized =
+                    s->vou_setup_seen && s->vou_latch_stage >= 10 &&
+                    sf2000_active_gma[0] != 0;
+                if (!s->panel_rgb_handoff_synchronized &&
+                    !s->panel_rgb_handoff_order_logged) {
+                    s->panel_rgb_handoff_order_logged = true;
+                    qemu_log_mask(LOG_GUEST_ERROR,
+                                  "sf2000: panel entered RGB mode before VOU/GMA raster was active\n");
+                }
+            }
         }
         break;
     case 0x2a:
@@ -4865,6 +4878,8 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_ramctrl[1] = 0xf0;
 		s->panel_ramctrl_count = 0;
 		s->panel_ramctrl_handoff_logged = false;
+		s->panel_rgb_handoff_synchronized = false;
+		s->panel_rgb_handoff_order_logged = false;
 	} else if (s->panel_cmd == 0xb0) {
 		s->panel_ramctrl_count = 0;
 	}
@@ -4934,6 +4949,8 @@ static void sf2000_panel_gpio_write(hwaddr full_addr, uint32_t value)
             s->panel_ramctrl[1] = 0xf0;
             s->panel_ramctrl_count = 0;
             s->panel_ramctrl_handoff_logged = false;
+            s->panel_rgb_handoff_synchronized = false;
+            s->panel_rgb_handoff_order_logged = false;
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: panel hardware reset RAMCTRL=00:f0\n");
         }
@@ -5908,6 +5925,11 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
+    if (s->vou_setup_seen && (s->panel_ramctrl[0] & 0x13) == 0x11 &&
+        !s->panel_rgb_handoff_synchronized) {
+        sf2000_vou_present_unlatched_background(s);
+        return 0;
+    }
     if (address_space_read(&address_space_memory, dmba_addr,
                            MEMTXATTRS_UNSPECIFIED, header,
                            sizeof(header)) != MEMTX_OK) {
@@ -6317,6 +6339,7 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     s->panel_wr = !!(s->gpio54 & BIT(7));
     s->panel_ramctrl[0] = 0x11;
     s->panel_ramctrl[1] = 0xf0;
+    s->panel_rgb_handoff_synchronized = true;
     sf2000_lcd = s;
     info_report("sf2000: lcd profile=%s panel=0x%08x geometry=%ux%u te=%uHz",
                 sf2000_board_profile_name(), profile->panel_id, s->width,
