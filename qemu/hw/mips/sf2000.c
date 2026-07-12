@@ -1131,6 +1131,7 @@ struct SF2000LCDState {
     uint16_t panel_cmd;
     uint16_t panel_args[4];
     uint8_t panel_arg_count;
+    uint16_t panel_data_count;
     uint16_t panel_x0;
     uint16_t panel_x1;
     uint16_t panel_y0;
@@ -1153,6 +1154,7 @@ struct SF2000LCDState {
     bool vou_setup_seen;
     bool vou_unlatched_logged;
     bool panel_vsync_unconnected_logged;
+    bool panel_ramwr_handoff_logged;
 };
 
 static SF2000LCDState *sf2000_lcd;
@@ -4768,6 +4770,13 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
 {
     uint16_t *args = s->panel_args;
 
+    if (s->panel_cmd != 0x2c && s->panel_cmd_count <= 64) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: panel-data cmd=0x%02x index=%u value=0x%04x\n",
+                      s->panel_cmd, s->panel_data_count, value);
+    }
+    s->panel_data_count++;
+
     switch (s->panel_cmd) {
     case 0x2a:
         if (s->panel_arg_count < ARRAY_SIZE(s->panel_args)) {
@@ -4827,6 +4836,7 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 
 	s->panel_cmd = value & 0xff;
 	s->panel_arg_count = 0;
+	s->panel_data_count = 0;
 	s->panel_cmd_count++;
 	/* RAMWR is issued on every TE edge; retain useful early/periodic traces
 	 * without filling the QEMU log at the panel refresh rate. */
@@ -5828,6 +5838,15 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
             qemu_log_mask(LOG_GUEST_ERROR,
                           "sf2000: GMA scanout with panel VSYNC disconnected pinmux=0x%08x\n",
                           rgb_pinmux);
+        }
+        return 0;
+    }
+    if (s->vou_setup_seen && s->panel_cmd == 0x2c) {
+        sf2000_vou_present_unlatched_background(s);
+        if (!s->panel_ramwr_handoff_logged) {
+            s->panel_ramwr_handoff_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: GMA scanout while panel remains in MCU RAMWR state\n");
         }
         return 0;
     }
