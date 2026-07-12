@@ -1217,13 +1217,18 @@ static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
         }
         break;
     case 7:
-        if (addr == 0x18808000 && value == 0x00000015) {
+        if (addr == 0x188003c8 && (value & 0x00000777) == 0) {
             s->vou_latch_stage = 8;
         }
         break;
     case 8:
-        if (addr == 0x188081ec && value == 0x00050000) {
+        if (addr == 0x18808000 && value == 0x00000015) {
             s->vou_latch_stage = 9;
+        }
+        break;
+    case 9:
+        if (addr == 0x188081ec && value == 0x00050000) {
+            s->vou_latch_stage = 10;
             info_report("sf2000: VOU RGB compositor latch complete");
         }
         break;
@@ -5284,7 +5289,8 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     }
     if (size == 4 && ((full_addr >= 0x18808000 &&
                        full_addr <= 0x188081ec) ||
-                      full_addr == 0x18800078)) {
+                      full_addr == 0x18800078 ||
+                      full_addr == 0x188003c8)) {
         sf2000_vou_track_latch(full_addr, value);
     }
     if (i != ARRAY_SIZE(sf2000_regs)) {
@@ -5808,7 +5814,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     if (!s || !dmba_addr) {
         return 0;
     }
-    if (s->vou_latch_stage < 9 && s->vou_setup_seen) {
+    if (s->vou_latch_stage < 10 && s->vou_setup_seen) {
         sf2000_vou_present_unlatched_background(s);
         return 0;
     }
