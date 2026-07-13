@@ -1158,6 +1158,7 @@ struct SF2000LCDState {
     bool panel_vsync_unconnected_logged;
     bool panel_clock_unconnected_logged;
     bool panel_clock_gated_logged;
+    bool panel_vou_disconnected_logged;
     bool panel_ramwr_handoff_logged;
     bool panel_ramctrl_handoff_logged;
     bool panel_ramctrl_explicit;
@@ -1239,8 +1240,19 @@ static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
         break;
     case 9:
         if (addr == 0x188081ec && value == 0x00050000) {
+            uint32_t dmba = 0;
+
             s->vou_latch_stage = 10;
             info_report("sf2000: VOU RGB compositor latch complete");
+            /*
+             * HC15 continuously scans the descriptor already latched by GMA.
+             * MuFrog legitimately submits its first UI frame before the
+             * asynchronous VOU setup finishes and does not ring the same
+             * doorbell a second time merely because RGB became ready.
+             */
+            if (sf2000_mmio_get32(0x18808304, &dmba) && dmba) {
+                sf2000_gma_present(dmba);
+            }
         }
         break;
     default:
@@ -5953,6 +5965,8 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     uint32_t rgb_clock_pinmux = 0;
     uint32_t rgb_clock_gate0 = 0;
     uint32_t rgb_clock_gate = 0;
+    uint32_t vou_ctrl = 0;
+    uint32_t vou_mode = 0;
 
     if (!s || !dmba_addr) {
         return 0;
@@ -5962,12 +5976,13 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         return 0;
     }
     if (sf2000_mmio_get32(0x188004a8, &rgb_pinmux) &&
-        ((rgb_pinmux >> 8) & 0xff) != 6) {
+        ((rgb_pinmux >> 8) & 0xff) != 6 &&
+        ((rgb_pinmux >> 16) & 0xff) != 6) {
         sf2000_vou_present_unlatched_background(s);
         if (!s->panel_vsync_unconnected_logged) {
             s->panel_vsync_unconnected_logged = true;
             qemu_log_mask(LOG_GUEST_ERROR,
-                          "sf2000: GMA scanout with panel VSYNC disconnected pinmux=0x%08x\n",
+                          "sf2000: GMA scanout with panel sync/DE disconnected pinmux=0x%08x\n",
                           rgb_pinmux);
         }
         return 0;
@@ -5996,6 +6011,33 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
             qemu_log_mask(LOG_GUEST_ERROR,
                           "sf2000: HC15 RGB scanout clocks gated gate1=0x%08x\n",
                           rgb_clock_gate);
+        }
+        return 0;
+    }
+    /*
+     * The HC15 panel helper connects the completed VOU raster to PRGB with
+     * two writes immediately before changing the shared pad mux:
+     *
+     *   VOU_HD_CTRL &= ~0x100;
+     *   VOU_HD_MODE = (VOU_HD_MODE & ~0xff) | 0x15;
+     *
+     * Readable GMA shadows and a running frame boundary are not sufficient
+     * without this last output-port connection.  Model it so QEMU no longer
+     * hides the Linux bank-address bug which produced a live scrambled raster
+     * on physical SF2000 hardware.
+     */
+    if (s->vou_setup_seen && s->panel_rgb_handoff_synchronized &&
+        sf2000_mmio_get32(0x188004a4, &rgb_clock_pinmux) &&
+        ((rgb_clock_pinmux >> 24) & 0xf) == 6 &&
+        sf2000_mmio_get32(0x18808084, &vou_ctrl) &&
+        sf2000_mmio_get32(0x18808000, &vou_mode) &&
+        ((vou_ctrl & 0x00000100) || (vou_mode & 0xff) != 0x15)) {
+        sf2000_vou_present_unlatched_background(s);
+        if (!s->panel_vou_disconnected_logged) {
+            s->panel_vou_disconnected_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: VOU raster disconnected from PRGB ctrl=0x%08x mode=0x%08x\n",
+                          vou_ctrl, vou_mode);
         }
         return 0;
     }
