@@ -4901,12 +4901,32 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 	if (s->panel_cmd == 0x2c) {
         s->panel_x = s->panel_x0;
         s->panel_y = s->panel_y0;
+		/*
+		 * The SF2000 ST7789 driver does not write RAMCTRL.  Its L08 TE
+		 * callback reissues CASET/RASET/RAMWR while VOU/GMA keeps running,
+		 * then immediately restores the RGB pads.  Treat that recovered
+		 * transaction—not an inferred RAMCTRL value—as the handoff latch.
+		 */
+		if (s->vou_setup_seen && s->vou_latch_stage >= 10 &&
+		    sf2000_active_gma[0] != 0) {
+			s->panel_rgb_handoff_synchronized = true;
+		}
 		if (trace_command)
 			qemu_log_mask(LOG_UNIMP,
 				      "sf2000: panel-ramwr x=%u..%u y=%u..%u pixels=%u\n",
 				      s->panel_x0, s->panel_x1, s->panel_y0, s->panel_y1,
 				      s->panel_pixel_count);
         s->panel_readback_active = false;
+	} else if (s->panel_cmd == 0x29) {
+		/*
+		 * The stock SF2000 sequence has no final RAMWR: after CASET/RASET it
+		 * issues INVON/DISPON and lets the first RGB VSYNC restart the panel
+		 * address counter.  This panel-side readiness may precede VOU setup;
+		 * scanout remains independently gated on the completed VOU latch.
+		 * MuFrog instead supplies the RAMWR branch above.
+		 */
+		s->panel_rgb_handoff_synchronized = true;
+		s->panel_readback_active = false;
     } else if (sf2000_panel_is_readback_cmd(s->panel_cmd)) {
         sf2000_panel_prepare_readback(s);
         if (s->panel_readback_len) {
@@ -5954,7 +5974,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     }
     if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
         sf2000_mmio_get32(0x188004a4, &rgb_clock_pinmux) &&
-        ((rgb_clock_pinmux >> 24) & 0xff) != 6) {
+        ((rgb_clock_pinmux >> 24) & 0xf) != 6) {
         sf2000_vou_present_unlatched_background(s);
         if (!s->panel_clock_unconnected_logged) {
             s->panel_clock_unconnected_logged = true;
@@ -5979,35 +5999,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
-    if (s->vou_setup_seen && s->panel_ramctrl_explicit &&
-        s->panel_rgb_handoff_synchronized &&
-        s->panel_cmd == 0x2c) {
-        sf2000_vou_present_unlatched_background(s);
-        if (!s->panel_ramwr_handoff_logged) {
-            s->panel_ramwr_handoff_logged = true;
-            qemu_log_mask(LOG_GUEST_ERROR,
-                          "sf2000: GMA scanout while panel remains in MCU RAMWR state\n");
-        }
-        return 0;
-    }
-    /*
-     * ST7789 RAMCTRL defaults to MCU RAM access and MCU display operation.
-     * A working VOU/GMA pipeline is therefore still invisible after a cold
-     * panel reset until RM=1 and DM=01 select RGB for both paths (0x11).
-     */
-    if (s->vou_setup_seen &&
-        (!(s->panel_ramctrl[0] & BIT(4)) ||
-         (s->panel_ramctrl[0] & 3) != 1)) {
-        /*
-         * It is valid, and required on cold hardware, to arm VOU/GMA while
-         * the shared pins still serve the MCU interface.  The raster is not
-         * visible until RAMCTRL transfers ownership, but it must already be
-         * frame-boundary-latched at that moment.
-         */
-        return 0;
-    }
-    if (s->vou_setup_seen && (s->panel_ramctrl[0] & 0x13) == 0x11 &&
-        !s->panel_rgb_handoff_synchronized) {
+    if (s->vou_setup_seen && !s->panel_rgb_handoff_synchronized) {
         sf2000_vou_present_unlatched_background(s);
         return 0;
     }
