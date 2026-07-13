@@ -1157,6 +1157,7 @@ struct SF2000LCDState {
     bool vou_unlatched_logged;
     bool panel_vsync_unconnected_logged;
     bool panel_clock_unconnected_logged;
+    bool panel_clock_gated_logged;
     bool panel_ramwr_handoff_logged;
     bool panel_ramctrl_handoff_logged;
     bool panel_ramctrl_explicit;
@@ -5341,6 +5342,17 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                       " size=%u value=0x%08" PRIx64 "\n",
                       full_addr, size, value);
     }
+    if (sf2000_trace_gma() &&
+        (full_addr == 0x18800060 || full_addr == 0x18800064 ||
+         full_addr == 0x18800078 || full_addr == 0x18800084 ||
+         full_addr == 0x18800094 || full_addr == 0x188003c8 ||
+         (full_addr >= 0x188004a0 && full_addr <= 0x188004ab) ||
+         (full_addr >= 0x18800500 && full_addr <= 0x1880050f))) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: rgb-sysio-write addr=0x%08" HWADDR_PRIx
+                      " size=%u value=0x%08" PRIx64 "\n",
+                      full_addr, size, value);
+    }
 
     for (i = 0; i < ARRAY_SIZE(sf2000_regs); i++) {
         if (sf2000_regs[i].valid && sf2000_regs[i].addr == (full_addr & ~3u)) {
@@ -5891,7 +5903,7 @@ static void sf2000_vou_present_unlatched_background(SF2000LCDState *s)
         }
     }
     dpy_gfx_update(s->con, 0, 0, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
-    if (!s->vou_unlatched_logged) {
+    if (s->vou_latch_stage < 10 && !s->vou_unlatched_logged) {
         s->vou_unlatched_logged = true;
         qemu_log_mask(LOG_GUEST_ERROR,
                       "sf2000: GMA doorbell before VOU RGB latch stage=%u; displaying VPO background\n",
@@ -5919,6 +5931,8 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     int y;
     uint32_t rgb_pinmux = 0;
     uint32_t rgb_clock_pinmux = 0;
+    uint32_t rgb_clock_gate0 = 0;
+    uint32_t rgb_clock_gate = 0;
 
     if (!s || !dmba_addr) {
         return 0;
@@ -5947,6 +5961,21 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
             qemu_log_mask(LOG_GUEST_ERROR,
                           "sf2000: GMA scanout with panel pixel clock disconnected pinmux=0x%08x\n",
                           rgb_clock_pinmux);
+        }
+        return 0;
+    }
+    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+        sf2000_mmio_get32(0x18800064, &rgb_clock_gate) &&
+        sf2000_mmio_get32(0x18800060, &rgb_clock_gate0) &&
+        (rgb_clock_gate & 0x00000600) != 0x00000600 &&
+        !((rgb_clock_gate0 & 0x00000f88) == 0x00000f88 &&
+          (rgb_clock_gate & 0x0bc04040) == 0x0bc04040)) {
+        sf2000_vou_present_unlatched_background(s);
+        if (!s->panel_clock_gated_logged) {
+            s->panel_clock_gated_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: HC15 RGB scanout clocks gated gate1=0x%08x\n",
+                          rgb_clock_gate);
         }
         return 0;
     }
