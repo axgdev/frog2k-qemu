@@ -168,7 +168,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GE_STATUS       (SF2000_GE_BASE + 0x08)
 #define SF2000_GE_HQ_FIRST     (SF2000_GE_BASE + 0x10)
 #define SF2000_GE_HQ_LAST      (SF2000_GE_BASE + 0x14)
-#define SF2000_GE_QUEUE_DUMP_WORDS 64
+#define SF2000_GE_QUEUE_DUMP_WORDS 192
 #define SF2000_GE_QUEUE_DUMP_DEFAULT 0
 #define SF2000_GMA_BASE        0x18808000ULL
 #define SF2000_GMA_SIZE        0x00003000ULL
@@ -3348,6 +3348,248 @@ static void sf2000_ge_rgb16_stretch(uint32_t dst, uint32_t dst_pitch,
     g_free(src_image);
 }
 
+static const uint8_t sf2000_ge_group_words[20] = {
+    1, 2, 2, 2, 2, 3, 1, 2, 2, 1, 2, 2, 0, 2, 2, 1, 0, 1, 7, 128,
+};
+
+static unsigned sf2000_ge_format_bytes(uint32_t context)
+{
+    switch ((context >> 12) & 0x1f) {
+    case 0: /* XRGB8888 */
+    case 1: /* ARGB8888 */
+        return 4;
+    case 5: /* ARGB1555 */
+    case 6: /* RGB565 */
+    case 3: /* ARGB4444 */
+        return 2;
+    case 12: /* CLUT8, used by stock firmware */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static uint32_t sf2000_ge_read_pixel(uint32_t address, uint32_t context)
+{
+    uint32_t value = 0;
+    unsigned format = context >> 12 & 0x1f;
+    unsigned bytes = sf2000_ge_format_bytes(context);
+
+    if (!bytes || address_space_read(&address_space_memory, address,
+            MEMTXATTRS_UNSPECIFIED, &value, bytes) != MEMTX_OK) {
+        return 0;
+    }
+    value = le32_to_cpu(value);
+    switch (format) {
+    case 0:
+        return value | 0xff000000u;
+    case 1:
+        return value;
+    case 3:
+        return ((value >> 12 & 0xf) * 0x11u << 24) |
+               ((value >> 8 & 0xf) * 0x11u << 16) |
+               ((value >> 4 & 0xf) * 0x11u << 8) |
+               ((value & 0xf) * 0x11u);
+    case 5:
+        return ((value & 0x8000u) ? 0xff000000u : 0) |
+               ((value >> 10 & 0x1f) * 255u / 31u << 16) |
+               ((value >> 5 & 0x1f) * 255u / 31u << 8) |
+               ((value & 0x1f) * 255u / 31u);
+    case 6:
+        return 0xff000000u |
+               ((value >> 11 & 0x1f) * 255u / 31u << 16) |
+               ((value >> 5 & 0x3f) * 255u / 63u << 8) |
+               ((value & 0x1f) * 255u / 31u);
+    default:
+        return value;
+    }
+}
+
+static void sf2000_ge_write_pixel(uint32_t address, uint32_t context,
+                                  uint32_t argb)
+{
+    uint32_t value;
+    unsigned format = context >> 12 & 0x1f;
+    unsigned bytes = sf2000_ge_format_bytes(context);
+
+    switch (format) {
+    case 0:
+    case 1:
+        value = argb;
+        break;
+    case 3:
+        value = (argb >> 28 & 0xf) << 12 | (argb >> 20 & 0xf) << 8 |
+                (argb >> 12 & 0xf) << 4 | (argb >> 4 & 0xf);
+        break;
+    case 5:
+        value = (argb >> 31) << 15 | (argb >> 19 & 0x1f) << 10 |
+                (argb >> 11 & 0x1f) << 5 | (argb >> 3 & 0x1f);
+        break;
+    case 6:
+        value = (argb >> 19 & 0x1f) << 11 |
+                (argb >> 10 & 0x3f) << 5 | (argb >> 3 & 0x1f);
+        break;
+    default:
+        value = argb;
+        break;
+    }
+    value = cpu_to_le32(value);
+    if (bytes) {
+        address_space_write(&address_space_memory, address,
+                            MEMTXATTRS_UNSPECIFIED, &value, bytes);
+    }
+}
+
+static unsigned sf2000_ge_decode_groups(const uint32_t *node, unsigned words,
+                                        const uint32_t *groups[20])
+{
+    uint32_t mask;
+    unsigned offset = 1;
+    unsigned group;
+
+    memset(groups, 0, sizeof(*groups) * 20);
+    if (!words || (node[0] & 0xff000000u) != 0x02000000u) {
+        return 0;
+    }
+    mask = node[0] & 0x000fffffu;
+    for (group = 0; group < 20; group++) {
+        if (!(mask & (1u << group))) {
+            continue;
+        }
+        if (offset + sf2000_ge_group_words[group] > words) {
+            return 0;
+        }
+        groups[group] = node + offset;
+        offset += sf2000_ge_group_words[group];
+    }
+    return offset;
+}
+
+static unsigned sf2000_ge_grouped_node_words(uint32_t header)
+{
+    uint32_t mask;
+    unsigned words = 1;
+    unsigned group;
+
+    if ((header & 0xff000000u) != 0x02000000u) {
+        return 0;
+    }
+    mask = header & 0x000fffffu;
+    for (group = 0; group < 20; group++) {
+        if (mask & (1u << group)) {
+            words += sf2000_ge_group_words[group];
+        }
+    }
+    return words;
+}
+
+static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
+{
+    const uint32_t *group[20];
+    const uint32_t *source;
+    uint32_t dst_address;
+    uint32_t src_address;
+    uint32_t dst_context;
+    uint32_t src_context;
+    uint32_t dst_xy;
+    uint32_t dst_wh;
+    uint32_t src_xy;
+    uint32_t src_wh;
+    unsigned dst_bytes;
+    unsigned src_bytes;
+    unsigned dx, dy, dw, dh, sx, sy, sw, sh, x, y;
+
+    if (!sf2000_ge_decode_groups(node, words, group) || !group[0] ||
+        !group[1] || !group[8]) {
+        return;
+    }
+    dst_address = group[1][0];
+    dst_context = group[1][1];
+    dst_bytes = sf2000_ge_format_bytes(dst_context);
+    dst_xy = group[8][0];
+    dst_wh = group[8][1];
+    dx = dst_xy & 0xfff;
+    dy = dst_xy >> 16 & 0xfff;
+    dw = dst_wh & 0xfff;
+    dh = dst_wh >> 16 & 0xfff;
+    if (!dst_address || !dst_bytes || !dw || !dh) {
+        return;
+    }
+
+    /* Vendor function 3 is a solid rectangle paint. */
+    if ((group[0][0] & 0x3f) == 3 && group[5]) {
+        uint32_t raw = group[5][0];
+        uint32_t pitch = (dst_context & 0xfff) * dst_bytes;
+
+        for (y = 0; y < dh; y++) {
+            for (x = 0; x < dw; x++) {
+                uint32_t address = dst_address + (dy + y) * pitch +
+                                   (dx + x) * dst_bytes;
+                uint32_t value = cpu_to_le32(raw);
+
+                address_space_write(&address_space_memory, address,
+                                    MEMTXATTRS_UNSPECIFIED, &value, dst_bytes);
+            }
+        }
+        return;
+    }
+
+    /* Direct copies use SRC; composited/scaled copies use PTN. */
+    source = group[3] ? group[3] : group[2];
+    if (!source) {
+        return;
+    }
+    src_address = source[0];
+    src_context = source[1];
+    src_bytes = sf2000_ge_format_bytes(src_context);
+    if (!src_address || !src_bytes) {
+        return;
+    }
+    if (group[10]) {
+        src_xy = group[10][0];
+        src_wh = group[10][1];
+    } else {
+        src_xy = group[9] ? group[9][0] : 0;
+        src_wh = dst_wh;
+    }
+    sx = src_xy & 0xfff;
+    sy = src_xy >> 16 & 0xfff;
+    sw = src_wh & 0xfff;
+    sh = src_wh >> 16 & 0xfff;
+    if (!sw || !sh) {
+        return;
+    }
+    if (group[14]) {
+        dst_xy = group[14][0];
+        dst_wh = group[14][1];
+        dx = dst_xy & 0xfff;
+        dy = dst_xy >> 16 & 0xfff;
+        dw = dst_wh & 0xfff;
+        dh = dst_wh >> 16 & 0xfff;
+    }
+    for (y = 0; y < dh; y++) {
+        unsigned source_y = sy + (uint64_t)y * sh / dh;
+
+        if (src_context & 0x00200000u) {
+            source_y = sy + sh - 1u - (source_y - sy);
+        }
+        for (x = 0; x < dw; x++) {
+            unsigned source_x = sx + (uint64_t)x * sw / dw;
+            uint32_t argb;
+
+            if (src_context & 0x00100000u) {
+                source_x = sx + sw - 1u - (source_x - sx);
+            }
+            argb = sf2000_ge_read_pixel(src_address +
+                    source_y * (src_context & 0xfff) * src_bytes +
+                    source_x * src_bytes, src_context);
+            sf2000_ge_write_pixel(dst_address +
+                    (dy + y) * (dst_context & 0xfff) * dst_bytes +
+                    (dx + x) * dst_bytes, dst_context, argb);
+        }
+    }
+}
+
 static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
 {
     uint32_t dst;
@@ -3357,22 +3599,30 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
     uint32_t height;
     size_t len;
 
-    if (words == 14 && node[0] == 0x02008367 && node[1] == 0x00a00003) {
+    if (words == 14 && node[0] == 0x02008367 && node[1] == 0x00a00003 &&
+        ((node[3] >> 12) & 0x1f) == 6) {
         sf2000_ge_rgb16_fill(node[2], (node[3] & 0xfff) * 2u,
                              node[10], node[11], node[6]);
         return;
     }
-    if (words == 9 && node[0] == 0x02000307 && node[1] == 0x00000002) {
+    if (words == 9 && node[0] == 0x02000307 && node[1] == 0x00000002 &&
+        ((node[3] >> 12) & 0x1f) == 6 &&
+        ((node[5] >> 12) & 0x1f) == 6) {
         sf2000_ge_rgb16_blit(node[2], (node[3] & 0xfff) * 2u,
                              node[4], (node[5] & 0xfff) * 2u,
                              node[6], node[7], node[8]);
         return;
     }
     if (words == 22 && node[0] == 0x0206870f &&
-        node[1] == 0x00a03009) {
+        node[1] == 0x00a03009 && ((node[3] >> 12) & 0x1f) == 6 &&
+        ((node[7] >> 12) & 0x1f) == 6) {
         sf2000_ge_rgb16_stretch(node[2], (node[3] & 0xfff) * 2u,
                                 node[6], (node[7] & 0xfff) * 2u,
                                 node[9], node[12]);
+        return;
+    }
+    if ((node[0] & 0xff000000u) == 0x02000000u) {
+        sf2000_ge_execute_grouped_node(node, words);
         return;
     }
     if (words < 26 || node[0] != 0x0201ffff) {
@@ -3445,7 +3695,8 @@ static void sf2000_ge_complete_queue(void)
     uint32_t first;
     uint32_t last;
     uint32_t words;
-    uint32_t node[SF2000_GE_QUEUE_DUMP_WORDS];
+    uint32_t *node;
+    uint32_t offset;
     unsigned dump_limit;
     unsigned node_dump_limit;
     unsigned i;
@@ -3467,9 +3718,39 @@ static void sf2000_ge_complete_queue(void)
         return;
     }
 
-    words = MIN((last - first) / 4u + 1u, (uint32_t)SF2000_GE_QUEUE_DUMP_WORDS);
-    if (sf2000_ge_read_node(first, node, words)) {
-        sf2000_ge_execute_node(node, words);
+    words = (last - first) / 4u + 1u;
+    if (words > 0x3c000u / sizeof(uint32_t)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: ge queue too large words=%u\n", words);
+        sf2000_mmio_set32(SF2000_GE_STATUS, 0);
+        return;
+    }
+    node = g_new(uint32_t, words);
+    if (!sf2000_ge_read_node(first, node, words)) {
+        g_free(node);
+        sf2000_mmio_set32(SF2000_GE_STATUS, 0);
+        return;
+    }
+    for (offset = 0; offset < words; ) {
+        uint32_t header_offset = offset;
+        unsigned node_words;
+
+        /* Four optional address-extension records precede the group header. */
+        while (header_offset + 1u < words &&
+               (node[header_offset] & 0xff0003ffu) == 0x81000001u) {
+            header_offset += 2u;
+        }
+        node_words = sf2000_ge_grouped_node_words(node[header_offset]);
+        if (!node_words || header_offset + node_words > words) {
+            if (sf2000_trace_ge()) {
+                qemu_log_mask(LOG_UNIMP,
+                              "sf2000: ge unknown node offset=%u word=%08x\n",
+                              offset, node[offset]);
+            }
+            break;
+        }
+        sf2000_ge_execute_node(node + header_offset, node_words);
+        offset = header_offset + node_words;
     }
 
     dump_limit = sf2000_ge_dump_limit();
@@ -3482,7 +3763,8 @@ static void sf2000_ge_complete_queue(void)
                       words > 13 ? node[13] : 0, words > 17 ? node[17] : 0,
                       words > 25 ? node[25] : 0);
         if (sf2000_ge_queue_dump_count < node_dump_limit) {
-            for (i = 0; i < words; i++) {
+            for (i = 0; i < MIN(words,
+                         (uint32_t)SF2000_GE_QUEUE_DUMP_WORDS); i++) {
                 qemu_log_mask(LOG_UNIMP, "sf2000: ge-node[%02u]=0x%08x\n",
                               i, node[i]);
             }
@@ -3493,6 +3775,8 @@ static void sf2000_ge_complete_queue(void)
         }
         sf2000_ge_queue_dump_count++;
     }
+
+    g_free(node);
 
     sf2000_mmio_set32(SF2000_GE_STATUS, 0);
     /*
