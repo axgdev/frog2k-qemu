@@ -3363,6 +3363,7 @@ static unsigned sf2000_ge_format_bytes(uint32_t context)
     case 3: /* ARGB4444 */
         return 2;
     case 12: /* CLUT8, used by stock firmware */
+    case 29: /* A8 source mask */
         return 1;
     default:
         return 0;
@@ -3391,6 +3392,8 @@ static uint32_t sf2000_ge_expand_pixel(uint32_t value, unsigned format)
                ((value >> 11 & 0x1f) * 255u / 31u << 16) |
                ((value >> 5 & 0x3f) * 255u / 63u << 8) |
                ((value & 0x1f) * 255u / 31u);
+    case 29:
+        return (value & 0xffu) << 24;
     default:
         return value;
     }
@@ -3619,6 +3622,44 @@ static uint32_t sf2000_ge_apply_compositor(uint32_t rop, uint32_t global_color,
     return result;
 }
 
+static bool sf2000_ge_source_key_allows(uint32_t rop, uint32_t pixel,
+                                        uint32_t key)
+{
+    uint32_t mode = rop & 0xf0c00000u;
+
+    switch (mode) {
+    case 0xe0400000u:
+        return (pixel & 0x00ffffffu) == (key & 0x00ffffffu);
+    case 0xe0800000u:
+        return (pixel & 0x00ffffffu) != (key & 0x00ffffffu);
+    case 0x10800000u:
+        return (pixel >> 24) == (key >> 24);
+    case 0x10400000u:
+        return (pixel >> 24) != (key >> 24);
+    default:
+        return true;
+    }
+}
+
+static bool sf2000_ge_destination_key_allows(uint32_t rop, uint32_t pixel,
+                                             uint32_t key)
+{
+    uint32_t mode = rop & 0x0f300000u;
+
+    switch (mode) {
+    case 0x0e100000u:
+        return (pixel & 0x00ffffffu) == (key & 0x00ffffffu);
+    case 0x0e200000u:
+        return (pixel & 0x00ffffffu) != (key & 0x00ffffffu);
+    case 0x01200000u:
+        return (pixel >> 24) == (key >> 24);
+    case 0x01100000u:
+        return (pixel >> 24) != (key >> 24);
+    default:
+        return true;
+    }
+}
+
 static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
 {
     const uint32_t *group[20];
@@ -3636,6 +3677,10 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
     unsigned dst_bytes;
     unsigned src_bytes;
     unsigned dx, dy, dw, dh, sx, sy, sw, sh, x, y;
+    unsigned mask_x = 0;
+    unsigned mask_y = 0;
+    uint32_t mask_address = 0;
+    uint32_t mask_context = 0;
     unsigned rotation = 0;
 
     if (!sf2000_ge_decode_groups(node, words, group) || !group[0] ||
@@ -3693,11 +3738,9 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
                 uint32_t destination_color = sf2000_ge_read_pixel(address,
                                                                    dst_context);
 
-                if (group[7] &&
-                    (rop & 0x0e100000u) == 0x0e100000u &&
-                    (destination_color & 0x00ffffffu) !=
-                    (sf2000_ge_expand_pixel(group[7][0],
-                         dst_context >> 12 & 0x1f) & 0x00ffffffu)) {
+                if (group[7] && !sf2000_ge_destination_key_allows(rop,
+                        destination_color, sf2000_ge_expand_pixel(group[7][0],
+                            dst_context >> 12 & 0x1f))) {
                     continue;
                 }
                 sf2000_ge_write_pixel(address, dst_context,
@@ -3763,6 +3806,17 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
             rotation = 270;
         }
     }
+    if (group[4] && ((group[4][1] >> 12) & 0x1f) == 29) {
+        mask_address = group[4][0];
+        mask_context = group[4][1];
+        if (group[11]) {
+            mask_x = group[11][0] & 0xfff;
+            mask_y = group[11][0] >> 16 & 0xfff;
+        } else {
+            mask_x = sx;
+            mask_y = sy;
+        }
+    }
     for (y = 0; y < dh; y++) {
         unsigned source_y = sy + (uint64_t)y * sh / dh;
 
@@ -3792,19 +3846,31 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
             argb = sf2000_ge_read_pixel(src_address +
                     source_y * (src_context & 0xfff) * src_bytes +
                     source_x * src_bytes, src_context);
+            if (mask_address) {
+                uint8_t alpha = 0;
+                unsigned mx = mask_x + source_x - sx;
+                unsigned my = mask_y + source_y - sy;
+
+                if (address_space_read(&address_space_memory,
+                        mask_address + my * (mask_context & 0xfff) + mx,
+                        MEMTXATTRS_UNSPECIFIED, &alpha, sizeof(alpha)) !=
+                        MEMTX_OK) {
+                    alpha = 0;
+                }
+                argb = (argb & 0x00ffffffu) |
+                       (((argb >> 24) * alpha + 127u) / 255u) << 24;
+            }
             destination_pixel = dst_address +
                 (dy + y) * (dst_context & 0xfff) * dst_bytes +
                 (dx + x) * dst_bytes;
             destination_argb = sf2000_ge_read_pixel(destination_pixel,
                                                      dst_context);
-            if (group[7] && (rop & 0xe0800000u) == 0xe0800000u &&
-                (argb & 0x00ffffffu) ==
-                (group[7][1] & 0x00ffffffu)) {
+            if (group[7] && !sf2000_ge_source_key_allows(rop, argb,
+                                                          group[7][1])) {
                 continue;
             }
-            if (group[7] && (rop & 0x0e100000u) == 0x0e100000u &&
-                (destination_argb & 0x00ffffffu) !=
-                (group[7][0] & 0x00ffffffu)) {
+            if (group[7] && !sf2000_ge_destination_key_allows(rop,
+                    destination_argb, group[7][0])) {
                 continue;
             }
             argb = sf2000_ge_apply_compositor(rop, global_color, argb,
