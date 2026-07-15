@@ -3369,17 +3369,8 @@ static unsigned sf2000_ge_format_bytes(uint32_t context)
     }
 }
 
-static uint32_t sf2000_ge_read_pixel(uint32_t address, uint32_t context)
+static uint32_t sf2000_ge_expand_pixel(uint32_t value, unsigned format)
 {
-    uint32_t value = 0;
-    unsigned format = context >> 12 & 0x1f;
-    unsigned bytes = sf2000_ge_format_bytes(context);
-
-    if (!bytes || address_space_read(&address_space_memory, address,
-            MEMTXATTRS_UNSPECIFIED, &value, bytes) != MEMTX_OK) {
-        return 0;
-    }
-    value = le32_to_cpu(value);
     switch (format) {
     case 0:
         return value | 0xff000000u;
@@ -3403,6 +3394,19 @@ static uint32_t sf2000_ge_read_pixel(uint32_t address, uint32_t context)
     default:
         return value;
     }
+}
+
+static uint32_t sf2000_ge_read_pixel(uint32_t address, uint32_t context)
+{
+    uint32_t value = 0;
+    unsigned format = context >> 12 & 0x1f;
+    unsigned bytes = sf2000_ge_format_bytes(context);
+
+    if (!bytes || address_space_read(&address_space_memory, address,
+            MEMTXATTRS_UNSPECIFIED, &value, bytes) != MEMTX_OK) {
+        return 0;
+    }
+    return sf2000_ge_expand_pixel(le32_to_cpu(value), format);
 }
 
 static void sf2000_ge_write_pixel(uint32_t address, uint32_t context,
@@ -3483,6 +3487,138 @@ static unsigned sf2000_ge_grouped_node_words(uint32_t header)
     return words;
 }
 
+static unsigned sf2000_ge_argb_channel(uint32_t argb, unsigned channel)
+{
+    return argb >> (channel * 8) & 0xff;
+}
+
+static unsigned sf2000_ge_blend_factor(unsigned function, unsigned channel,
+                                       uint32_t source, uint32_t destination)
+{
+    unsigned source_alpha = source >> 24;
+    unsigned destination_alpha = destination >> 24;
+    unsigned source_channel = sf2000_ge_argb_channel(source, channel);
+    unsigned destination_channel = sf2000_ge_argb_channel(destination, channel);
+
+    switch (function) {
+    case 1: /* ZERO */
+        return 0;
+    case 2: /* ONE */
+        return 255;
+    case 3: /* SRCCOLOR */
+        return channel == 3 ? source_alpha : source_channel;
+    case 4: /* INVSRCCOLOR */
+        return 255 - (channel == 3 ? source_alpha : source_channel);
+    case 5: /* SRCALPHA */
+        return source_alpha;
+    case 6: /* INVSRCALPHA */
+        return 255 - source_alpha;
+    case 7: /* DESTALPHA */
+        return destination_alpha;
+    case 8: /* INVDESTALPHA */
+        return 255 - destination_alpha;
+    case 9: /* DESTCOLOR */
+        return channel == 3 ? destination_alpha : destination_channel;
+    case 10: /* INVDESTCOLOR */
+        return 255 - (channel == 3 ? destination_alpha : destination_channel);
+    case 11: /* SRCALPHASAT */
+        return channel == 3 ? 255 : MIN(source_alpha,
+                                        255 - destination_alpha);
+    default:
+        return 0;
+    }
+}
+
+static uint32_t sf2000_ge_modulate_rgb(uint32_t argb, uint32_t color)
+{
+    unsigned alpha = argb >> 24;
+    unsigned red = (argb >> 16 & 0xff) * (color >> 16 & 0xff) / 255;
+    unsigned green = (argb >> 8 & 0xff) * (color >> 8 & 0xff) / 255;
+    unsigned blue = (argb & 0xff) * (color & 0xff) / 255;
+
+    return alpha << 24 | red << 16 | green << 8 | blue;
+}
+
+static uint32_t sf2000_ge_premultiply(uint32_t argb, unsigned alpha)
+{
+    unsigned red = (argb >> 16 & 0xff) * alpha / 255;
+    unsigned green = (argb >> 8 & 0xff) * alpha / 255;
+    unsigned blue = (argb & 0xff) * alpha / 255;
+
+    return (argb & 0xff000000u) | red << 16 | green << 8 | blue;
+}
+
+static uint32_t sf2000_ge_apply_compositor(uint32_t rop, uint32_t global_color,
+                                          uint32_t source,
+                                          uint32_t destination)
+{
+    unsigned blend_selector = rop >> 9 & 7;
+    bool colorize = false;
+    unsigned channel;
+    uint32_t result = source;
+
+    if (rop & 0x00008000u) {
+        if (blend_selector >= 3) {
+            colorize = true;
+            blend_selector -= 3;
+        }
+        if (blend_selector == 1) {
+            result = (result & 0x00ffffffu) | (global_color & 0xff000000u);
+        } else if (blend_selector == 2) {
+            unsigned alpha = (result >> 24) * (global_color >> 24) / 255;
+
+            result = (result & 0x00ffffffu) | alpha << 24;
+        }
+    } else if (blend_selector == 3) {
+        colorize = true;
+    }
+    if (colorize) {
+        result = sf2000_ge_modulate_rgb(result, global_color);
+    }
+    if (rop & 0x00000100u) {
+        result = sf2000_ge_premultiply(result, global_color >> 24);
+    }
+    if (rop & 0x00001000u) {
+        result = sf2000_ge_premultiply(result, result >> 24);
+    }
+    if (rop & 0x00002000u) {
+        destination = sf2000_ge_premultiply(destination, destination >> 24);
+    }
+    if (rop & 0x00008000u) {
+        uint32_t blended = 0;
+        unsigned source_function = rop >> 4 & 0xf;
+        unsigned destination_function = rop & 0xf;
+
+        for (channel = 0; channel < 4; channel++) {
+            unsigned source_value = sf2000_ge_argb_channel(result, channel);
+            unsigned destination_value = sf2000_ge_argb_channel(destination,
+                                                                 channel);
+            unsigned source_factor = sf2000_ge_blend_factor(source_function,
+                channel, result, destination);
+            unsigned destination_factor = sf2000_ge_blend_factor(
+                destination_function, channel, result, destination);
+            unsigned value = (source_value * source_factor +
+                              destination_value * destination_factor + 127) /
+                             255;
+
+            blended |= MIN(value, 255) << (channel * 8);
+        }
+        result = blended;
+    }
+    if ((rop & 0x00040000u) && (result >> 24)) {
+        unsigned alpha = result >> 24;
+        unsigned red = MIN(255u, (result >> 16 & 0xff) * 255u / alpha);
+        unsigned green = MIN(255u, (result >> 8 & 0xff) * 255u / alpha);
+        unsigned blue = MIN(255u, (result & 0xff) * 255u / alpha);
+
+        result = alpha << 24 | red << 16 | green << 8 | blue;
+    }
+    if (rop & 0x00080000u) {
+        result ^= destination;
+    }
+    return result;
+}
+
 static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
 {
     const uint32_t *group[20];
@@ -3495,6 +3631,8 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
     uint32_t dst_wh;
     uint32_t src_xy;
     uint32_t src_wh;
+    uint32_t rop;
+    uint32_t global_color;
     unsigned dst_bytes;
     unsigned src_bytes;
     unsigned dx, dy, dw, dh, sx, sy, sw, sh, x, y;
@@ -3504,6 +3642,8 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
         !group[1] || !group[8]) {
         return;
     }
+    rop = group[15] ? group[15][0] : 0x00004000u;
+    global_color = group[17] ? group[17][0] : 0xffffffffu;
     dst_address = group[1][0];
     dst_context = group[1][1];
     dst_bytes = sf2000_ge_format_bytes(dst_context);
@@ -3517,8 +3657,9 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
         return;
     }
 
-    /* Vendor function 3 is a solid rectangle paint. */
-    if ((group[0][0] & 0x3f) == 3 && group[5]) {
+    /* Preserve the common no-effect solid rectangle fast path. */
+    if ((group[0][0] & 0x3f) == 3 && group[5] && !group[7] &&
+        rop == 0x00030000u) {
         uint32_t raw = group[5][0];
         uint32_t pitch = (dst_context & 0xfff) * dst_bytes;
 
@@ -3530,6 +3671,39 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
 
                 address_space_write(&address_space_memory, address,
                                     MEMTXATTRS_UNSPECIFIED, &value, dst_bytes);
+            }
+        }
+        return;
+    }
+
+    /* Functions 1 and 3 paint an ARGB or native-format solid color. */
+    if (((group[0][0] & 0x3f) == 1 ||
+         (group[0][0] & 0x3f) == 3) && group[5]) {
+        uint32_t source_color = group[5][0];
+        uint32_t pitch = (dst_context & 0xfff) * dst_bytes;
+
+        if ((group[0][0] & 0x3f) == 3 && group[6]) {
+            source_color = sf2000_ge_expand_pixel(source_color,
+                                                   group[6][0] & 0x1f);
+        }
+        for (y = 0; y < dh; y++) {
+            for (x = 0; x < dw; x++) {
+                uint32_t address = dst_address + (dy + y) * pitch +
+                                   (dx + x) * dst_bytes;
+                uint32_t destination_color = sf2000_ge_read_pixel(address,
+                                                                   dst_context);
+
+                if (group[7] &&
+                    (rop & 0x0e100000u) == 0x0e100000u &&
+                    (destination_color & 0x00ffffffu) !=
+                    (sf2000_ge_expand_pixel(group[7][0],
+                         dst_context >> 12 & 0x1f) & 0x00ffffffu)) {
+                    continue;
+                }
+                sf2000_ge_write_pixel(address, dst_context,
+                    sf2000_ge_apply_compositor(rop, global_color,
+                                               source_color,
+                                               destination_color));
             }
         }
         return;
@@ -3598,6 +3772,8 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
         for (x = 0; x < dw; x++) {
             unsigned source_x = sx + (uint64_t)x * sw / dw;
             uint32_t argb;
+            uint32_t destination_argb;
+            uint32_t destination_pixel;
 
             if (rotation == 90) {
                 source_x = sx + (uint64_t)y * sw / dh;
@@ -3616,9 +3792,24 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
             argb = sf2000_ge_read_pixel(src_address +
                     source_y * (src_context & 0xfff) * src_bytes +
                     source_x * src_bytes, src_context);
-            sf2000_ge_write_pixel(dst_address +
-                    (dy + y) * (dst_context & 0xfff) * dst_bytes +
-                    (dx + x) * dst_bytes, dst_context, argb);
+            destination_pixel = dst_address +
+                (dy + y) * (dst_context & 0xfff) * dst_bytes +
+                (dx + x) * dst_bytes;
+            destination_argb = sf2000_ge_read_pixel(destination_pixel,
+                                                     dst_context);
+            if (group[7] && (rop & 0xe0800000u) == 0xe0800000u &&
+                (argb & 0x00ffffffu) ==
+                (group[7][1] & 0x00ffffffu)) {
+                continue;
+            }
+            if (group[7] && (rop & 0x0e100000u) == 0x0e100000u &&
+                (destination_argb & 0x00ffffffu) !=
+                (group[7][0] & 0x00ffffffu)) {
+                continue;
+            }
+            argb = sf2000_ge_apply_compositor(rop, global_color, argb,
+                                               destination_argb);
+            sf2000_ge_write_pixel(destination_pixel, dst_context, argb);
         }
     }
 }
@@ -3648,7 +3839,9 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
     }
     if (words == 22 && node[0] == 0x0206870f &&
         node[1] == 0x00a03009 && ((node[3] >> 12) & 0x1f) == 6 &&
-        ((node[7] >> 12) & 0x1f) == 6 && node[15] == 0x00000080) {
+        ((node[7] >> 12) & 0x1f) == 6 &&
+        !(node[7] & 0x00300000u) && node[13] == 0x00004000u &&
+        node[15] == 0x00000080) {
         sf2000_ge_rgb16_stretch(node[2], (node[3] & 0xfff) * 2u,
                                 node[6], (node[7] & 0xfff) * 2u,
                                 node[9], node[12]);
