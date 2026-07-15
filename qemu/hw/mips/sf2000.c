@@ -6875,17 +6875,25 @@ static void sf2000_lcd_update(void *opaque)
      * guest can update a framebuffer with CPU stores and cache maintenance
      * without ringing the DMBA doorbell again.  Refresh active layers when
      * QEMU asks the console for a new frame, just as the physical scanout does.
+     *
+     * Before the VOU latch, the physical output remains on its fallback
+     * background even if a descriptor has already been armed.  The latch
+     * transition presents that descriptor itself, so continuous scanout starts
+     * only afterwards.  This also keeps an actual premature guest doorbell
+     * visible to the ordering oracle in sf2000_gma_present_block().
      */
-    if (sf2000_active_gma[0]) {
-        sf2000_gma_present_with_dump(sf2000_active_gma[0], false);
-    }
-    if (sf2000_active_gma[1] &&
-        sf2000_active_gma[1] != sf2000_active_gma[0]) {
-        sf2000_gma_present_with_dump(sf2000_active_gma[1], false);
-    }
-    if (sf2000_active_gma[0] || sf2000_active_gma[1]) {
-        s->redraw = false;
-        return;
+    if (s->vou_latch_stage >= 10) {
+        if (sf2000_active_gma[0]) {
+            sf2000_gma_present_with_dump(sf2000_active_gma[0], false);
+        }
+        if (sf2000_active_gma[1] &&
+            sf2000_active_gma[1] != sf2000_active_gma[0]) {
+            sf2000_gma_present_with_dump(sf2000_active_gma[1], false);
+        }
+        if (sf2000_active_gma[0] || sf2000_active_gma[1]) {
+            s->redraw = false;
+            return;
+        }
     }
 
     if (!s->fb_base || !s->control) {
@@ -6947,7 +6955,8 @@ static void sf2000_lcd_scanout_timer(void *opaque)
 {
     SF2000LCDState *s = opaque;
 
-    if (sf2000_active_gma[0] || sf2000_active_gma[1]) {
+    if (s->vou_latch_stage >= 10 &&
+        (sf2000_active_gma[0] || sf2000_active_gma[1])) {
         uint32_t hash;
 
         sf2000_lcd_update(s);
