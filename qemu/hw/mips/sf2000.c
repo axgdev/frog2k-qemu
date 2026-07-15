@@ -1123,6 +1123,9 @@ struct SF2000LCDState {
     uint32_t control;
     uint32_t panel_te_hz;
     bool redraw;
+    QEMUTimer *scanout_timer;
+    uint32_t scanout_hash;
+    bool scanout_hash_valid;
 
     uint32_t gpio54;
     uint32_t gpio354;
@@ -1171,6 +1174,7 @@ static uint32_t sf2000_rgb565_lut[UINT16_MAX + 1u];
 static bool sf2000_rgb565_lut_ready;
 static uint32_t sf2000_rgb565_to_surface(uint16_t pix);
 static void sf2000_gma_present(uint32_t dmba_addr);
+static void sf2000_lcd_update(void *opaque);
 static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
                                          bool dump_frame);
 static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
@@ -6813,7 +6817,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     return d6;
 }
 
-static void sf2000_gma_present(uint32_t dmba_addr)
+static void sf2000_gma_present_with_dump(uint32_t dmba_addr, bool dump_frame)
 {
     SF2000LCDState *s = sf2000_lcd;
     uint32_t seen[8];
@@ -6846,7 +6850,14 @@ static void sf2000_gma_present(uint32_t dmba_addr)
         seen[i] = cur;
         cur = sf2000_gma_present_block(s, cur, false);
     }
-    sf2000_dump_ppm_from_surface(s, "gma");
+    if (dump_frame) {
+        sf2000_dump_ppm_from_surface(s, "gma");
+    }
+}
+
+static void sf2000_gma_present(uint32_t dmba_addr)
+{
+    sf2000_gma_present_with_dump(dmba_addr, true);
 }
 
 static void sf2000_lcd_update(void *opaque)
@@ -6866,11 +6877,11 @@ static void sf2000_lcd_update(void *opaque)
      * QEMU asks the console for a new frame, just as the physical scanout does.
      */
     if (sf2000_active_gma[0]) {
-        sf2000_gma_present(sf2000_active_gma[0]);
+        sf2000_gma_present_with_dump(sf2000_active_gma[0], false);
     }
     if (sf2000_active_gma[1] &&
         sf2000_active_gma[1] != sf2000_active_gma[0]) {
-        sf2000_gma_present(sf2000_active_gma[1]);
+        sf2000_gma_present_with_dump(sf2000_active_gma[1], false);
     }
     if (sf2000_active_gma[0] || sf2000_active_gma[1]) {
         s->redraw = false;
@@ -6911,6 +6922,45 @@ static void sf2000_lcd_update(void *opaque)
 
     dpy_gfx_update(s->con, 0, 0, width, height);
     s->redraw = false;
+}
+
+static uint32_t sf2000_lcd_surface_hash(SF2000LCDState *s)
+{
+    DisplaySurface *surface = qemu_console_surface(s->con);
+    uint32_t hash = 2166136261u;
+    int x;
+    int y;
+
+    for (y = 0; y < surface_height(surface); y++) {
+        const uint32_t *row = (const uint32_t *)(surface_data(surface) +
+                              y * surface_stride(surface));
+
+        for (x = 0; x < surface_width(surface); x++) {
+            hash ^= row[x];
+            hash *= 16777619u;
+        }
+    }
+    return hash;
+}
+
+static void sf2000_lcd_scanout_timer(void *opaque)
+{
+    SF2000LCDState *s = opaque;
+
+    if (sf2000_active_gma[0] || sf2000_active_gma[1]) {
+        uint32_t hash;
+
+        sf2000_lcd_update(s);
+        hash = sf2000_lcd_surface_hash(s);
+        if (!s->scanout_hash_valid || hash != s->scanout_hash) {
+            s->scanout_hash = hash;
+            s->scanout_hash_valid = true;
+            sf2000_dump_ppm_from_surface(s, "gma");
+        }
+    }
+    timer_mod(s->scanout_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              NANOSECONDS_PER_SECOND / 30);
 }
 
 static void sf2000_lcd_invalidate(void *opaque)
@@ -7023,6 +7073,11 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     s->as = &address_space_memory;
     s->con = graphic_console_init(dev, 0, &sf2000_lcd_gfx_ops, s);
     qemu_console_resize(s->con, s->width, s->height);
+    s->scanout_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                    sf2000_lcd_scanout_timer, s);
+    timer_mod(s->scanout_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              NANOSECONDS_PER_SECOND / 30);
     s->panel_x1 = SF2000_LCD_WIDTH - 1;
     s->panel_y1 = SF2000_LCD_HEIGHT - 1;
     /* The stock ASD inherits the bootloader's already-active RGB handoff. */
