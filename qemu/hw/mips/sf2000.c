@@ -3498,6 +3498,7 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
     unsigned dst_bytes;
     unsigned src_bytes;
     unsigned dx, dy, dw, dh, sx, sy, sw, sh, x, y;
+    unsigned rotation = 0;
 
     if (!sf2000_ge_decode_groups(node, words, group) || !group[0] ||
         !group[1] || !group[8]) {
@@ -3567,6 +3568,27 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
         dw = dst_wh & 0xfff;
         dh = dst_wh >> 16 & 0xfff;
     }
+    if (group[18]) {
+        static const uint32_t rotate_90[7] = {
+            0, 0, 0x8000ffffu, 0, 0x0000ffffu, 0, 0,
+        };
+        static const uint32_t rotate_180[7] = {
+            0, 0x8000ffffu, 0x80000000u, 0,
+            0, 0x8000ffffu, 0,
+        };
+        static const uint32_t rotate_270[7] = {
+            0, 0x80000000u, 0x0000ffffu, 0,
+            0x8000ffffu, 0x80000000u, 0,
+        };
+
+        if (!memcmp(group[18], rotate_90, sizeof(rotate_90))) {
+            rotation = 90;
+        } else if (!memcmp(group[18], rotate_180, sizeof(rotate_180))) {
+            rotation = 180;
+        } else if (!memcmp(group[18], rotate_270, sizeof(rotate_270))) {
+            rotation = 270;
+        }
+    }
     for (y = 0; y < dh; y++) {
         unsigned source_y = sy + (uint64_t)y * sh / dh;
 
@@ -3576,6 +3598,17 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
         for (x = 0; x < dw; x++) {
             unsigned source_x = sx + (uint64_t)x * sw / dw;
             uint32_t argb;
+
+            if (rotation == 90) {
+                source_x = sx + (uint64_t)y * sw / dh;
+                source_y = sy + sh - 1u - (uint64_t)x * sh / dw;
+            } else if (rotation == 180) {
+                source_x = sx + sw - 1u - (uint64_t)x * sw / dw;
+                source_y = sy + sh - 1u - (uint64_t)y * sh / dh;
+            } else if (rotation == 270) {
+                source_x = sx + sw - 1u - (uint64_t)y * sw / dh;
+                source_y = sy + (uint64_t)x * sh / dw;
+            }
 
             if (src_context & 0x00100000u) {
                 source_x = sx + sw - 1u - (source_x - sx);
@@ -3615,7 +3648,7 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
     }
     if (words == 22 && node[0] == 0x0206870f &&
         node[1] == 0x00a03009 && ((node[3] >> 12) & 0x1f) == 6 &&
-        ((node[7] >> 12) & 0x1f) == 6) {
+        ((node[7] >> 12) & 0x1f) == 6 && node[15] == 0x00000080) {
         sf2000_ge_rgb16_stretch(node[2], (node[3] & 0xfff) * 2u,
                                 node[6], (node[7] & 0xfff) * 2u,
                                 node[9], node[12]);
