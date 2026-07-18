@@ -5727,10 +5727,10 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         if (gpio_vsync_pending) {
             /*
              * The emulated ST7789V TE signal is an edge, not a level held by a
-             * real GPIO pad. Stock firmware uses this aggregate GPIO IRQ as a
-             * wake source during panel bring-up and does not run a GPIO child
-             * handler here, so clear the synthetic edge after it has appeared
-             * once in the south-bridge IRQ status.
+             * real GPIO pad. Stock firmware consumes this edge while reading
+             * the south-bridge aggregate status. Linux still services the
+             * dedicated aggregate IRQ and safely acknowledges a physical
+             * GPIO child latch when one remains present.
              */
             sf2000_mmio_set32(SF2000_GPIO_L_ISR, 0);
         }
