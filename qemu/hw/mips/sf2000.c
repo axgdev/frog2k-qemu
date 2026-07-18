@@ -400,8 +400,10 @@ static bool sf2000_usb_link_active[2];
 static uint32_t sf2000_usb_power_reg[2];
 static uint32_t sf2000_usb_devctl_reg[2];
 static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
-static uint32_t sf2000_panel_sample_readback(SF2000LCDState *s,
-                                             uint32_t value);
+static uint32_t sf2000_panel_sample_readback_l(SF2000LCDState *s,
+                                               uint32_t value);
+static uint32_t sf2000_panel_sample_readback_t(SF2000LCDState *s,
+                                               uint32_t value);
 
 static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
 {
@@ -1319,6 +1321,7 @@ static uint32_t sf2000_wdt_count;
 static uint8_t sf2000_wdt_conf;
 static uint8_t sf2000_bootrom_bytes[SF2000_BOOT_SIZE];
 static QEMUTimer *sf2000_irq_poll_timer;
+static MemoryRegion *sf2000_ram_region;
 static bool sf2000_bootrom_ram_entry;
 static uint8_t sf2000_sflash_cmd;
 static uint32_t sf2000_sdio_arg;
@@ -4334,7 +4337,7 @@ static uint32_t sf2000_gpio_l_sample(uint32_t value)
     }
 
     if (sf2000_lcd) {
-        value = sf2000_panel_sample_readback(sf2000_lcd, value);
+        value = sf2000_panel_sample_readback_l(sf2000_lcd, value);
     }
 
     return value;
@@ -5099,6 +5102,13 @@ static size_t sf2000_panel_fill_readback(const SF2000BoardProfileSpec *profile,
             resp[1] = 0x06;
             len = 2;
             break;
+        case 0xb3:
+            resp[0] = 0xb3;
+            resp[1] = 0xf3;
+            resp[2] = 0xf3;
+            resp[3] = 0xf3;
+            len = 4;
+            break;
         case 0xd3:
             resp[0] = 0xf3;
             resp[1] = 0xf3;
@@ -5120,6 +5130,13 @@ static size_t sf2000_panel_fill_readback(const SF2000BoardProfileSpec *profile,
             resp[0] = 0xfc;
             resp[1] = 0x52;
             len = 2;
+            break;
+        case 0xf2:
+            resp[0] = 0xf2;
+            resp[1] = 0xf2;
+            resp[2] = 0xf2;
+            resp[3] = 0xf2;
+            len = 4;
             break;
         default:
             break;
@@ -5198,10 +5215,12 @@ static bool sf2000_panel_is_readback_cmd(uint8_t cmd)
     case 0x09:
     case 0x0a:
     case 0x0c:
+    case 0xb3:
     case 0xd3:
     case 0xda:
     case 0xdb:
     case 0xdc:
+    case 0xf2:
         return true;
     default:
         return false;
@@ -5219,31 +5238,42 @@ static void sf2000_panel_prepare_readback(SF2000LCDState *s)
     s->panel_readback_active = s->panel_readback_len > 0;
 }
 
-static uint32_t sf2000_panel_sample_readback(SF2000LCDState *s, uint32_t value)
+static uint8_t sf2000_panel_readback_value(SF2000LCDState *s)
 {
-    uint8_t bit;
+    if (!s->panel_readback_active) {
+        return 0;
+    }
+
+    return s->panel_readback[s->panel_readback_byte];
+}
+
+static uint32_t sf2000_panel_sample_readback_l(SF2000LCDState *s,
+                                               uint32_t value)
+{
+    uint8_t data;
 
     if (!s->panel_readback_active) {
         return value;
     }
 
-    bit = (s->panel_readback[s->panel_readback_byte] >>
-           (7 - s->panel_readback_bit)) & 1u;
-    if (bit) {
-        value |= BIT(SF2000_KEY_DATA_BIT);
-    } else {
-        value &= ~BIT(SF2000_KEY_DATA_BIT);
+    data = sf2000_panel_readback_value(s);
+    value &= ~(0x1fu << 2);
+    value |= (data & 0x1f) << 2;
+    return value;
+}
+
+static uint32_t sf2000_panel_sample_readback_t(SF2000LCDState *s,
+                                               uint32_t value)
+{
+    uint8_t data;
+
+    if (!s->panel_readback_active) {
+        return value;
     }
 
-    s->panel_readback_bit++;
-    if (s->panel_readback_bit == 8) {
-        s->panel_readback_bit = 0;
-        s->panel_readback_byte++;
-        if (s->panel_readback_byte >= s->panel_readback_len) {
-            s->panel_readback_active = false;
-        }
-    }
-
+    data = sf2000_panel_readback_value(s);
+    value &= ~(0x7u << 9);
+    value |= (data & 0xe0) << 4;
     return value;
 }
 
@@ -5553,12 +5583,15 @@ static void sf2000_panel_gpio_write(hwaddr full_addr, uint32_t value)
     bool old_wr;
     bool new_wr;
     bool old_reset_n;
+    bool old_rd;
+    bool new_rd;
 
     if (!s) {
         return;
     }
 
     old_reset_n = !!(s->gpio54 & BIT(1));
+    old_rd = !!(s->gpio354 & BIT(0));
     if (full_addr == 0x18800054) {
         s->gpio54 = value;
         /* LCD reset is active-low on L01. */
@@ -5582,6 +5615,19 @@ static void sf2000_panel_gpio_write(hwaddr full_addr, uint32_t value)
     new_wr = !!(s->gpio54 & BIT(7));
     s->panel_rs = !!(s->gpio354 & BIT(1));
     s->panel_wr = new_wr;
+    new_rd = !!(s->gpio354 & BIT(0));
+
+    /*
+     * RD low presents one complete byte on the split 8080 data bus.  Guest
+     * software samples the individual L/T pads through several MMIO reads;
+     * advance only when RD rises, exactly as the physical panel does.
+     */
+    if (!old_rd && new_rd && s->panel_readback_active) {
+        s->panel_readback_byte++;
+        if (s->panel_readback_byte >= s->panel_readback_len) {
+            s->panel_readback_active = false;
+        }
+    }
 
     if (!old_wr && new_wr) {
         sf2000_panel_latch(s, sf2000_panel_data_from_gpio(s));
@@ -5770,6 +5816,22 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         value &= ~BIT(22);
         value = sf2000_gpio_l_sample(value);
         value = sf2000_rf_gpio_l_sample(value);
+        value >>= ((full_addr & 3u) * 8u);
+        if (size < 4) {
+            value &= (1u << (size * 8)) - 1u;
+        }
+    } else if ((full_addr & ~3u) == 0x18800350) {
+        value = 0x00000083;
+        for (i = 0; i < ARRAY_SIZE(sf2000_regs); i++) {
+            if (sf2000_regs[i].valid &&
+                sf2000_regs[i].addr == 0x18800350) {
+                value = sf2000_regs[i].value;
+                break;
+            }
+        }
+        if (sf2000_lcd) {
+            value = sf2000_panel_sample_readback_t(sf2000_lcd, value);
+        }
         value >>= ((full_addr & 3u) * 8u);
         if (size < 4) {
             value &= (1u << (size * 8)) - 1u;
@@ -6954,8 +7016,22 @@ static uint32_t sf2000_lcd_surface_hash(SF2000LCDState *s)
 static void sf2000_lcd_scanout_timer(void *opaque)
 {
     SF2000LCDState *s = opaque;
+    bool dirty = true;
 
-    if (s->vou_latch_stage >= 10 &&
+    if (sf2000_ram_region) {
+        DirtyBitmapSnapshot *snap;
+
+        snap = memory_region_snapshot_and_clear_dirty(sf2000_ram_region,
+                                                       0x00f00000,
+                                                       0x00100000,
+                                                       DIRTY_MEMORY_VGA);
+        dirty = memory_region_snapshot_get_dirty(sf2000_ram_region, snap,
+                                                  0x00f00000,
+                                                  0x00100000);
+        g_free(snap);
+    }
+
+    if (dirty && s->vou_latch_stage >= 10 &&
         (sf2000_active_gma[0] || sf2000_active_gma[1])) {
         uint32_t hash;
 
@@ -7478,6 +7554,8 @@ static void sf2000_init(MachineState *machine)
 
     memory_region_init_ram(ram, NULL, "sf2000.ram", machine->ram_size,
                            &error_fatal);
+    sf2000_ram_region = ram;
+    memory_region_set_log(ram, true, DIRTY_MEMORY_VGA);
     memory_region_add_subregion(sysmem, SF2000_RAM_BASE, ram);
     sf2000_seed_boot_handoff();
 
