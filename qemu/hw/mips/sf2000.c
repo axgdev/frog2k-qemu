@@ -1060,7 +1060,8 @@ static const SF2000RegDefault sf2000_reg_defaults[] = {
     { 0x18800224, 0x0000ffff }, { 0x18800230, 0x81a20cc9 },
     { 0x18800348, 0xffff8183 }, { 0x18800350, 0x00000083 },
     { 0x18800354, 0x00080283 }, { 0x18800358, 0x0008feff },
-    { 0x18800380, 0x812b0900 }, { 0x18800384, 0x02000040 },
+    /* Bootloader PLL parameter 340: (340 * 27) / 10 = 918 MHz. */
+    { 0x18800380, 0x81540900 }, { 0x18800384, 0x02000040 },
     { 0x18800388, 0x0000005f }, { 0x188003cc, 0x00005555 },
     { 0x18800470, 0x0021001a }, { 0x18800478, 0x011c000d },
     { 0x18800480, 0x0022001a }, { 0x188004a0, 0x06060000 },
@@ -1291,6 +1292,35 @@ static struct {
     uint64_t dtb_vaddr;
     bool linux_elf;
 } loaderparams;
+
+static Clock *sf2000_cpu_refclk;
+static uint64_t sf2000_cpu_current_hz;
+
+static void sf2000_update_cpu_clock(void)
+{
+    uint32_t select_reg = 0, pll_reg = 0, param_reg = 0;
+    unsigned selector;
+    uint64_t hz;
+
+    sf2000_mmio_get32(0x18800074, &select_reg);
+    sf2000_mmio_get32(0x1880007c, &pll_reg);
+    sf2000_mmio_get32(0x18800380, &param_reg);
+    selector = (select_reg >> 8) & 7;
+    if (selector == 7 && (pll_reg & BIT(7))) {
+        unsigned parameter = (param_reg >> 16) & 0x7fff;
+        hz = (((uint64_t)parameter * 27 + 9) / 10) * 1000000;
+    } else {
+        static const unsigned mhz[8] = { 594, 396, 297, 198,
+                                         198, 198, 198, 198 };
+        hz = (uint64_t)mhz[selector] * 1000000;
+    }
+    if (sf2000_cpu_refclk && hz != sf2000_cpu_current_hz) {
+        clock_set_hz(sf2000_cpu_refclk, hz);
+        sf2000_cpu_current_hz = hz;
+        qemu_log_mask(LOG_UNIMP, "sf2000: CPU clock now %llu Hz\n",
+                      (unsigned long long)hz);
+    }
+}
 
 typedef struct SF2000RegState {
     hwaddr addr;
@@ -6047,6 +6077,14 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_regs[i].value = (old_value & ~mask) |
                                (((uint32_t)value << shift) & mask);
     }
+    if ((full_addr & ~3u) == 0x18800074) {
+        uint32_t select_reg;
+
+        if (sf2000_mmio_get32(0x18800074, &select_reg) &&
+            (select_reg & BIT(22))) {
+            sf2000_update_cpu_clock();
+        }
+    }
     if (size == 4 && ((full_addr >= 0x18808000 &&
                        full_addr <= 0x188081ec) ||
                       full_addr == 0x18800078 ||
@@ -7508,7 +7546,9 @@ static void sf2000_init(MachineState *machine)
     }
 
     cpuclk = clock_new(OBJECT(machine), "cpu-refclk");
-    clock_set_hz(cpuclk, sf2000_cpu_hz());
+    sf2000_cpu_refclk = cpuclk;
+    sf2000_cpu_current_hz = sf2000_cpu_hz();
+    clock_set_hz(cpuclk, sf2000_cpu_current_hz);
     cpu = mips_cpu_create_with_clock(machine->cpu_type, cpuclk, false);
     cpu_mips_irq_init_cpu(cpu);
     sf2000_eirq3 = cpu->env.irq[SF2000_EIRQ3_LINE];
