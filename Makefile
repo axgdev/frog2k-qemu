@@ -3,7 +3,8 @@
 QEMU_VERSION := 10.2.2
 QEMU_TARBALL := qemu-$(QEMU_VERSION).tar.xz
 QEMU_URL := https://download.qemu.org/$(QEMU_TARBALL)
-QEMU_SRC := .cache/qemu-$(QEMU_VERSION)
+QEMU_WORK ?= /tmp/sf2000-qemu
+QEMU_SRC := $(QEMU_WORK)/qemu-$(QEMU_VERSION)
 QEMU_BIN := $(QEMU_SRC)/build/qemu-system-mipsel
 SF2000_QEMU_SRC := qemu/hw/mips/sf2000.c
 QEMU_JOBS ?=
@@ -181,14 +182,15 @@ $(QEMU_SRC)/.fetched:
 	test -f .cache/$(QEMU_TARBALL) || curl -L -o .cache/$(QEMU_TARBALL) $(QEMU_URL)
 	rm -rf $(QEMU_SRC)
 	mkdir -p $(QEMU_SRC)
-	tar -xf .cache/$(QEMU_TARBALL) -C $(QEMU_SRC) --strip-components=1
+	tar -xf .cache/$(QEMU_TARBALL) -C $(QEMU_SRC) --strip-components=1 \
+		--no-same-owner --no-same-permissions
 	touch $@
 
 patch: $(QEMU_SRC)/.patched
 
 $(QEMU_SRC)/.patched: $(QEMU_SRC)/.fetched patches/qemu-$(QEMU_VERSION)/0001-hw-mips-add-sf2000-machine.patch $(SF2000_QEMU_SRC)
-	cd $(QEMU_SRC) && { test -f hw/mips/sf2000.c || patch -p1 < ../../patches/qemu-$(QEMU_VERSION)/0001-hw-mips-add-sf2000-machine.patch; }
-	cp $(SF2000_QEMU_SRC) $(QEMU_SRC)/hw/mips/sf2000.c
+	cd $(QEMU_SRC) && { test -f hw/mips/sf2000.c || patch -p1 < $(CURDIR)/patches/qemu-$(QEMU_VERSION)/0001-hw-mips-add-sf2000-machine.patch; }
+	cp $(CURDIR)/$(SF2000_QEMU_SRC) $(QEMU_SRC)/hw/mips/sf2000.c
 	touch $@
 
 configure: $(QEMU_SRC)/build/build.ninja
