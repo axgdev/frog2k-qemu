@@ -7518,7 +7518,8 @@ static void sf2000_init(MachineState *machine)
      * stateful helper models with the same quiet baseline; explicit firmware
      * writes still replace these values through their normal handlers.
      */
-    sf2000_adc_ctrl[0] = 0x00000000;
+    /* HC15xx battery ADC reports volts * 50 in CTRL0[23:16]. */
+    sf2000_adc_ctrl[0] = 200u << 16; /* 4.00 V, a realistic charged cell. */
     sf2000_adc_ctrl[1] = 0x20001400;
     sf2000_adc_ctrl[2] = 0x00000f2d;
     sf2000_adc_ctrl[3] = 0x00000001;
