@@ -218,8 +218,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GPIO_L_ISR      0x1880005cULL
 #define SF2000_GPIO_L08        BIT(8)
 #define SF2000_GPIO_R_IN       0x188000f0ULL
+#define SF2000_GPIO_R_OUT      0x188000f4ULL
+#define SF2000_GPIO_R_DIR      0x188000f8ULL
 #define SF2000_GPIO_R_ISR      0x188000fcULL
 #define SF2000_GPIO_R_POK      BIT(30)
+#define SF2000_GPIO_R07        BIT(7)
+#define SF2000_PINMUX_R07      0x188004e7ULL
 #define SF2000_KEY_DATA_BIT    23
 #define SF2000_KEY_CLK_BIT     24
 #define SF2000_KEY_COUNT       12
@@ -444,6 +448,25 @@ static bool sf2000_audio_output_active(void)
     return sf2000_audio_powered && sf2000_audio_i2s_fade90 != 0;
 }
 
+static bool sf2000_audio_speaker_enabled(void)
+{
+    uint32_t output = 0;
+    uint32_t direction = 0;
+    uint32_t pinmux = 0;
+
+    return sf2000_mmio_get32(SF2000_GPIO_R_OUT, &output) &&
+           sf2000_mmio_get32(SF2000_GPIO_R_DIR, &direction) &&
+           sf2000_mmio_get32(SF2000_PINMUX_R07 & ~3u, &pinmux) &&
+           (direction & SF2000_GPIO_R07) &&
+           !(output & SF2000_GPIO_R07) &&
+           ((pinmux >> 24) & 0xff) == 0;
+}
+
+static bool sf2000_audio_audible(void)
+{
+    return sf2000_audio_output_active() && sf2000_audio_speaker_enabled();
+}
+
 static void sf2000_audio_gate_live_words(const SF2000BoardProfileSpec *profile,
                                          uint32_t *gate_l1,
                                          uint32_t *gate_r1)
@@ -460,7 +483,7 @@ static void sf2000_audio_gate_live_words(const SF2000BoardProfileSpec *profile,
 static void sf2000_audio_set_backend_active(void)
 {
     if (sf2000_audio_voice) {
-        AUD_set_active_out(sf2000_audio_voice, sf2000_audio_output_active());
+        AUD_set_active_out(sf2000_audio_voice, sf2000_audio_audible());
     }
 }
 
@@ -865,7 +888,7 @@ static void sf2000_audio_callback(void *opaque, int free)
 
     (void)opaque;
 
-    if (!sf2000_audio_voice || !sf2000_audio_output_active()) {
+    if (!sf2000_audio_voice || !sf2000_audio_audible()) {
         return;
     }
 
@@ -6220,6 +6243,10 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
          */
         sf2000_mmio_get32(SF2000_GPIO_R_ISR, &isr);
         sf2000_mmio_set32(SF2000_GPIO_R_ISR, isr & ~((uint32_t)value));
+    } else if (full_addr == SF2000_GPIO_R_OUT ||
+               full_addr == SF2000_GPIO_R_DIR ||
+               full_addr == SF2000_PINMUX_R07) {
+        sf2000_audio_set_backend_active();
     } else if (full_addr == SF2000_GPIO_L_OUT) {
         sf2000_gpio_l_write(sf2000_regs[i].value);
         sf2000_panel_gpio_write(full_addr, sf2000_regs[i].value);
@@ -6344,7 +6371,7 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
 
     if (!sf2000_audio_dma_reported && sf2000_audio_dma_bytes &&
         (sf2000_audio_snd_ctl08 & 1) && (sf2000_audio_snd_ctl0c & 1) &&
-        (sf2000_audio_snd_ctl50 & BIT(29))) {
+        (sf2000_audio_snd_ctl50 & BIT(29)) && sf2000_audio_audible()) {
         sf2000_audio_dma_reported = true;
         info_report("sf2000: audio guest DMA active base=0x%08x bytes=%u",
                     sf2000_audio_dma_base, sf2000_audio_dma_bytes);
