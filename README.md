@@ -390,7 +390,8 @@ si
 
 Implemented:
 
-- MIPS little-endian `24Kc` CPU model with a 918 MHz default reference clock.
+- MIPS little-endian `24Kc` CPU model with a 918 MHz default reference clock
+  and matching HC1512 selector-7 digital-PLL register state.
   This matches the original maximum CPU frequency. Lower-frequency research
   runs can use `SF2000_CPU_HZ=<hz>`, for example:
 
