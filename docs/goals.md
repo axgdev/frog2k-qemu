@@ -139,7 +139,7 @@ strong oracle:
   `audio-gain`, `audio-muted`, `audio-open-returns`,
   `audio-close-returns`, `audio-hw-close`, `pwm2-backlight`,
   `pwm2-backlight-active`, `audio-i2s-ctrl3c`,
-  `audio-i2s-fade90`, and audio playback contract
+  `audio-i2s-fade90`, `audio-stc`, and audio playback contract
   properties. The baseline boot log now prints the resolved audio and USB
   topology data, and QEMU now opens a live audio backend sink, so the
   remaining work is the full amplifier chain and guest-driven PCM behavior
@@ -153,6 +153,9 @@ strong oracle:
   runtime snapshot is now queryable as `audio-runtime-route` and
   `audio-runtime-channels`, but it still only captures the frontend/runtime
   choice rather than a full analog implementation.
+  SND0 STC0/STC1 now advance from QEMU virtual time at the recovered 45 kHz
+  rate, retain independent pause/resume state, and accept guest tick updates.
+  The reset snapshot is part of the board-contract smoke test.
   The PWM2/backlight on/off state is now boot-checked through the scanout
   blanking path, so the display model proves the off-state effect instead of
   only the register snapshot. The USB reset block is now boot-checked as

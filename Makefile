@@ -595,6 +595,7 @@ smoke-board-contract: build
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"pwm2-backlight-active"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-ctrl3c"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-i2s-fade90"}}\n'; \
+	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-stc"},"id":"audio-stc"}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"audio-dma"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-id"}}\n'; \
 	 printf '{"execute":"qom-get","arguments":{"path":"/machine","property":"usb-root-hub-ports"}}\n'; \
@@ -643,6 +644,7 @@ smoke-board-contract: build
 	grep -q '"return": "backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 hw_period=0 hw_periods=0"' build/logs/smoke-board-contract.console
 	grep -q '"return": "75"' build/logs/smoke-board-contract.console
 	grep -q '"return": "8"' build/logs/smoke-board-contract.console
+	grep -q '"return": "control=0x00000000 stc0=0 stc1=0", "id": "audio-stc"' build/logs/smoke-board-contract.console
 	grep -q 'pwm2_backlight_active=true' build/logs/smoke-board-contract.console
 	grep -q '"return": "closed"' build/logs/smoke-board-contract.console
 	grep -q '"return": "true"' build/logs/smoke-board-contract.console
@@ -660,7 +662,7 @@ smoke-board-contract: build
 	grep -q '"return": "clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x0000ff41"' build/logs/smoke-board-contract.console
 	grep -q '"return": "0x008f0000"' build/logs/smoke-board-contract.console
-	grep -q '"return": "base=0x00000000 bytes=0 pos=0 active=false"' build/logs/smoke-board-contract.console
+	grep -q '"return": "base=0x00000000 bytes=0 producer=0 consumer=0 queued=0 active=false configured=false"' build/logs/smoke-board-contract.console
 	grep -q '"return": "true"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1d6b:0002"' build/logs/smoke-board-contract.console
 	grep -q '"return": "1"' build/logs/smoke-board-contract.console

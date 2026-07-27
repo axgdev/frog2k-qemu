@@ -458,9 +458,48 @@ static uint32_t sf2000_audio_snd_ctl04;
 static uint32_t sf2000_audio_snd_ctl08;
 static uint32_t sf2000_audio_snd_ctl0c;
 static uint32_t sf2000_audio_snd_ctl50;
+static uint32_t sf2000_audio_stc_control;
+static uint32_t sf2000_audio_stc_tick[2];
+static int64_t sf2000_audio_stc_epoch_ns[2];
 static bool sf2000_audio_dma_reported;
 static bool sf2000_audio_callback_reported;
 static bool sf2000_audio_apll_reset_seen;
+
+static uint32_t sf2000_audio_stc_read(unsigned id)
+{
+    uint32_t tick = sf2000_audio_stc_tick[id];
+
+    if (sf2000_audio_stc_control & BIT(16 + id)) {
+        int64_t elapsed_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) -
+                             sf2000_audio_stc_epoch_ns[id];
+
+        if (elapsed_ns > 0) {
+            tick += muldiv64(elapsed_ns, 45000, NANOSECONDS_PER_SECOND);
+        }
+    }
+    return tick;
+}
+
+static void sf2000_audio_stc_latch(unsigned id)
+{
+    sf2000_audio_stc_tick[id] = sf2000_audio_stc_read(id);
+    sf2000_audio_stc_epoch_ns[id] =
+        qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+}
+
+static void sf2000_audio_stc_control_write(uint32_t value)
+{
+    sf2000_audio_stc_latch(0);
+    sf2000_audio_stc_latch(1);
+    sf2000_audio_stc_control = value;
+}
+
+static void sf2000_audio_stc_tick_write(unsigned id, uint32_t value)
+{
+    sf2000_audio_stc_tick[id] = value;
+    sf2000_audio_stc_epoch_ns[id] =
+        qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+}
 
 static bool sf2000_audio_dma_configured(void)
 {
@@ -786,6 +825,14 @@ static char *sf2000_machine_audio_i2s_ctrl3c_get(Object *obj, Error **errp)
 static char *sf2000_machine_audio_i2s_fade90_get(Object *obj, Error **errp)
 {
     return g_strdup_printf("0x%08x", sf2000_audio_i2s_fade90);
+}
+
+static char *sf2000_machine_audio_stc_get(Object *obj, Error **errp)
+{
+    return g_strdup_printf("control=0x%08x stc0=%u stc1=%u",
+                           sf2000_audio_stc_control,
+                           sf2000_audio_stc_read(0),
+                           sf2000_audio_stc_read(1));
 }
 
 static char *sf2000_machine_audio_dma_get(Object *obj, Error **errp)
@@ -6088,6 +6135,16 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         value = sf2000_adc_read(full_addr, size);
     } else if (sf2000_wdt_decode(full_addr)) {
         value = 0;
+    } else if ((full_addr & ~3u) == SF2000_AUDIO_I2S_BASE + 0xb4 ||
+               (full_addr & ~3u) == SF2000_AUDIO_I2S_BASE + 0xbc) {
+        unsigned id = (full_addr & ~3u) ==
+                      SF2000_AUDIO_I2S_BASE + 0xbc;
+
+        value = sf2000_audio_stc_read(id);
+        value >>= ((full_addr & 3u) * 8u);
+        if (size < 4) {
+            value &= (1u << (size * 8)) - 1u;
+        }
     } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x38) {
         value = (sf2000_audio_dma_consumer << 12) |
                 (sf2000_audio_dma_producer >> 4);
@@ -6402,6 +6459,12 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_mmio_set32(full_addr, sf2000_audio_snd_ctl0c);
     } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x50) {
         sf2000_audio_snd_ctl50 = value;
+    } else if ((full_addr & ~3u) == SF2000_AUDIO_I2S_BASE + 0xb0) {
+        sf2000_audio_stc_control_write(sf2000_regs[i].value);
+    } else if ((full_addr & ~3u) == SF2000_AUDIO_I2S_BASE + 0xb4) {
+        sf2000_audio_stc_tick_write(0, sf2000_regs[i].value);
+    } else if ((full_addr & ~3u) == SF2000_AUDIO_I2S_BASE + 0xbc) {
+        sf2000_audio_stc_tick_write(1, sf2000_regs[i].value);
     } else if (full_addr == SF2000_AUDIO_I2S_CTRL3C) {
         sf2000_audio_i2s_ctrl3c = value;
     } else if (full_addr == SF2000_AUDIO_I2S_FADE90) {
@@ -7812,6 +7875,13 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_audio_snd_ctl08 = 0;
     sf2000_audio_snd_ctl0c = 0;
     sf2000_audio_snd_ctl50 = 0;
+    sf2000_audio_stc_control = 0;
+    sf2000_audio_stc_tick[0] = 0;
+    sf2000_audio_stc_tick[1] = 0;
+    sf2000_audio_stc_epoch_ns[0] =
+        qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    sf2000_audio_stc_epoch_ns[1] =
+        qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     sf2000_audio_dma_reported = false;
     sf2000_audio_callback_reported = false;
     sf2000_audio_apll_reset_seen = false;
@@ -8105,6 +8175,8 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_audio_i2s_ctrl3c_get, NULL);
     object_class_property_add_str(oc, "audio-i2s-fade90",
                                   sf2000_machine_audio_i2s_fade90_get, NULL);
+    object_class_property_add_str(oc, "audio-stc",
+                                  sf2000_machine_audio_stc_get, NULL);
     object_class_property_add_str(oc, "audio-dma",
                                   sf2000_machine_audio_dma_get, NULL);
     object_class_property_add_bool(oc, "storage-selftest-raw",
