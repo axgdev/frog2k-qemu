@@ -173,6 +173,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GE_STATUS       (SF2000_GE_BASE + 0x08)
 #define SF2000_GE_HQ_FIRST     (SF2000_GE_BASE + 0x10)
 #define SF2000_GE_HQ_LAST      (SF2000_GE_BASE + 0x14)
+#define SF2000_GE_STATUS_DONE  BIT(0)
+#define SF2000_GE_STATUS_BUSY  BIT(31)
+#define SF2000_GE_IRQ_BIT      4
+#define SF2000_GE_IRQ          BIT(SF2000_GE_IRQ_BIT)
+#define SF2000_GE_LATENCY_NS   (NANOSECONDS_PER_SECOND / 1000)
 #define SF2000_GE_QUEUE_DUMP_WORDS 192
 #define SF2000_GE_QUEUE_DUMP_DEFAULT 0
 #define SF2000_GMA_BASE        0x18808000ULL
@@ -1259,6 +1264,7 @@ struct SF2000LCDState {
     QEMUTimer *scanout_timer;
     uint32_t scanout_hash;
     bool scanout_hash_valid;
+    uint64_t scanout_sequence;
 
     uint32_t gpio54;
     uint32_t gpio354;
@@ -1451,6 +1457,9 @@ static uint32_t sf2000_wdt_count;
 static uint8_t sf2000_wdt_conf;
 static uint8_t sf2000_bootrom_bytes[SF2000_BOOT_SIZE];
 static QEMUTimer *sf2000_irq_poll_timer;
+static QEMUTimer *sf2000_ge_timer;
+static bool sf2000_ge_irq_pending;
+static uint64_t sf2000_ge_submit_sequence;
 static MemoryRegion *sf2000_ram_region;
 static bool sf2000_bootrom_ram_entry;
 static uint8_t sf2000_sflash_cmd;
@@ -3056,6 +3065,8 @@ static void sf2000_update_irq(void)
                   sf2000_irq1_enabled(SF2000_IRC_IRQ)) ||
                  (sf2000_audio_irq_pending() &&
                   sf2000_irq1_enabled(SF2000_SND_IRQ)) ||
+                 (sf2000_ge_irq_pending &&
+                  sf2000_irq1_enabled(SF2000_GE_IRQ)) ||
                  (sf2000_sb_timer_pending() && !sf2000_sb_timer_irq_masked) ||
                  (sf2000_sdio_irq_pending &&
                   sf2000_irq1_enabled(SF2000_SDIO_IRQ)));
@@ -3165,6 +3176,18 @@ static bool sf2000_trace_gma(void)
         trace = env && env[0] && g_strcmp0(env, "0") != 0;
     }
     return trace != 0;
+}
+
+static bool sf2000_scanout_oracle(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = g_getenv("SF2000_SCANOUT_ORACLE");
+
+        enabled = env && *env && strcmp(env, "0");
+    }
+    return enabled;
 }
 
 static bool sf2000_trace_sflash(void)
@@ -4231,6 +4254,58 @@ static void sf2000_ge_complete_queue(void)
     if (sf2000_active_gma[1] && sf2000_active_gma[1] != sf2000_active_gma[0]) {
         sf2000_gma_present(sf2000_active_gma[1]);
     }
+}
+
+static void sf2000_ge_timer_cb(void *opaque)
+{
+    uint32_t status = 0;
+
+    (void)opaque;
+    sf2000_ge_complete_queue();
+    sf2000_mmio_get32(SF2000_GE_STATUS, &status);
+    status &= ~SF2000_GE_STATUS_BUSY;
+    status |= SF2000_GE_STATUS_DONE;
+    sf2000_mmio_set32(SF2000_GE_STATUS, status);
+    sf2000_ge_irq_pending = true;
+    if (sf2000_scanout_oracle() &&
+        (sf2000_ge_submit_sequence <= 8 ||
+         !(sf2000_ge_submit_sequence % 300))) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: ge-queue complete seq=%" PRIu64
+                      " status=%08x irq=1\n",
+                      sf2000_ge_submit_sequence, status);
+    }
+    sf2000_update_irq();
+}
+
+static void sf2000_ge_start_queue(void)
+{
+    uint32_t status = 0;
+
+    sf2000_mmio_get32(SF2000_GE_STATUS, &status);
+    if (status & SF2000_GE_STATUS_BUSY) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: GE doorbell while command queue busy\n");
+        return;
+    }
+    status &= ~SF2000_GE_STATUS_DONE;
+    status |= SF2000_GE_STATUS_BUSY;
+    sf2000_mmio_set32(SF2000_GE_STATUS, status);
+    sf2000_ge_irq_pending = false;
+    sf2000_ge_submit_sequence++;
+    if (sf2000_scanout_oracle() &&
+        (sf2000_ge_submit_sequence <= 8 ||
+         !(sf2000_ge_submit_sequence % 300))) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: ge-queue start seq=%" PRIu64
+                      " latency_ns=%" PRId64 " status=%08x\n",
+                      sf2000_ge_submit_sequence,
+                      (int64_t)SF2000_GE_LATENCY_NS,
+                      status);
+    }
+    sf2000_update_irq();
+    timer_mod(sf2000_ge_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              SF2000_GE_LATENCY_NS);
 }
 
 static bool sf2000_adc_decode(hwaddr full_addr, unsigned *index,
@@ -5868,6 +5943,9 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         if (sf2000_audio_irq_pending()) {
             value |= SF2000_SND_IRQ;
         }
+        if (sf2000_ge_irq_pending) {
+            value |= SF2000_GE_IRQ;
+        }
         if (sf2000_sdio_irq_pending) {
             value |= SF2000_SDIO_IRQ;
             /*
@@ -6039,9 +6117,6 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         uint32_t ge_value;
 
         sf2000_mmio_get32(full_addr, &ge_value);
-        if ((full_addr & ~3u) == SF2000_GE_STATUS) {
-            ge_value &= ~BIT(31); /* GE command queue idle/done. */
-        }
         value = ge_value >> ((full_addr & 3u) * 8u);
         if (size < 4) {
             value &= (1u << (size * 8)) - 1u;
@@ -6396,12 +6471,27 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     } else if (full_addr == 0x18800354) {
         sf2000_panel_gpio_write(full_addr, sf2000_regs[i].value);
     } else if (sf2000_ge_decode(full_addr)) {
-        if ((full_addr & ~3u) == SF2000_GE_CTRL) {
+        if ((full_addr & ~3u) == SF2000_GE_STATUS) {
+            uint32_t status = old_value & ~((uint32_t)value);
+
+            /*
+             * GE status is write-one-to-clear.  In particular, acknowledging
+             * DONE must not manufacture or clear the independently driven
+             * BUSY bit.
+             */
+            if (old_value & SF2000_GE_STATUS_BUSY) {
+                status |= SF2000_GE_STATUS_BUSY;
+            }
+            sf2000_mmio_set32(SF2000_GE_STATUS, status);
+            sf2000_ge_irq_pending =
+                (status & SF2000_GE_STATUS_DONE) != 0;
+            sf2000_update_irq();
+        } else if ((full_addr & ~3u) == SF2000_GE_CTRL) {
             sf2000_mmio_set32(SF2000_GE_CTRL, sf2000_regs[i].value &
                               ~BIT(31));
         } else if ((full_addr & ~3u) == SF2000_GE_START &&
                    (sf2000_regs[i].value & BIT(1))) {
-            sf2000_ge_complete_queue();
+            sf2000_ge_start_queue();
         }
     } else if ((full_addr & ~0x80u) == 0x18808350) {
         unsigned layer = (full_addr & 0x80u) ? 1 : 0;
@@ -7191,6 +7281,66 @@ static uint32_t sf2000_lcd_surface_hash(SF2000LCDState *s)
     return hash;
 }
 
+static void sf2000_lcd_report_scanout(SF2000LCDState *s, uint32_t hash)
+{
+    DisplaySurface *surface = qemu_console_surface(s->con);
+    uint32_t colors[17];
+    uint32_t nonblack = 0;
+    unsigned distinct = 0;
+    bool periodic;
+    int x;
+    int y;
+
+    if (!sf2000_scanout_oracle()) {
+        return;
+    }
+    s->scanout_sequence++;
+    periodic = s->scanout_sequence <= 16 ||
+               !(s->scanout_sequence % 60);
+    for (y = 0; y < surface_height(surface); y++) {
+        const uint32_t *row = (const uint32_t *)(surface_data(surface) +
+                              y * surface_stride(surface));
+
+        for (x = 0; x < surface_width(surface); x++) {
+            unsigned i;
+
+            if (row[x] & 0x00ffffffu) {
+                nonblack++;
+            }
+            for (i = 0; i < distinct; i++) {
+                if (colors[i] == row[x]) {
+                    break;
+                }
+            }
+            if (i == distinct && distinct < ARRAY_SIZE(colors)) {
+                colors[distinct++] = row[x];
+            }
+            /*
+             * A diverse non-periodic frame is healthy.  Stop as soon as that
+             * is proven instead of scanning all 76,800 pixels at 60 Hz.
+             * Solid and near-solid frames still receive a complete count.
+             */
+            if (!periodic && distinct > 2) {
+                return;
+            }
+        }
+    }
+    /*
+     * Keep the oracle inexpensive in long emulator runs while guaranteeing a
+     * report within one second of a changing 60 Hz game.  A solid/near-solid
+     * failure is always reported immediately.
+     */
+    if (periodic || distinct <= 2) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: scanout-oracle seq=%" PRIu64
+                      " hash=%08x distinct=%u nonblack=%u pixels=%u"
+                      " gma0=%08x gma1=%08x\n",
+                      s->scanout_sequence, hash, distinct, nonblack,
+                      surface_width(surface) * surface_height(surface),
+                      sf2000_active_gma[0], sf2000_active_gma[1]);
+    }
+}
+
 static void sf2000_lcd_scanout_timer(void *opaque)
 {
     SF2000LCDState *s = opaque;
@@ -7218,6 +7368,7 @@ static void sf2000_lcd_scanout_timer(void *opaque)
         if (!s->scanout_hash_valid || hash != s->scanout_hash) {
             s->scanout_hash = hash;
             s->scanout_hash_valid = true;
+            sf2000_lcd_report_scanout(s, hash);
             sf2000_dump_ppm_from_surface(s, "gma");
         }
     }
@@ -7617,6 +7768,12 @@ static void sf2000_cpu_reset(void *opaque)
 
     sf2000_wdt_count = 0;
     sf2000_wdt_disable();
+    sf2000_ge_irq_pending = false;
+    sf2000_ge_submit_sequence = 0;
+    if (sf2000_ge_timer) {
+        timer_del(sf2000_ge_timer);
+    }
+    sf2000_mmio_set32(SF2000_GE_STATUS, 0);
 
     sf2000_sdio_arg = 0;
     sf2000_sdio_cmd = 0;
@@ -7724,6 +7881,8 @@ static void sf2000_init(MachineState *machine)
     sf2000_i2c_ier1[0] = 0x00;
     sf2000_wdt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                     sf2000_wdt_timer_cb, NULL);
+    sf2000_ge_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                   sf2000_ge_timer_cb, NULL);
     sf2000_timer_ack();
     sf2000_next_vsync_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                            NANOSECONDS_PER_SECOND / 60;

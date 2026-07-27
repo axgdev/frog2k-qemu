@@ -139,6 +139,21 @@ make run-vnc VNC=0.0.0.0:1 SD_IMAGE=/path/to/sd.img
 
 Connect to `vnc://host:5901`.
 
+GE submissions follow the HC15xx asynchronous contract: the doorbell asserts
+BUSY, completion occurs on a virtual timer, DONE and SYSINT source 4 are then
+raised, and a second doorbell while BUSY is reported as a guest error.  This is
+deliberately not completed in the MMIO write callback; synchronous completion
+previously hid source-surface lifetime bugs which produced a blank panel only
+on the physical SF2000.
+
+Set `SF2000_SCANOUT_ORACLE=1` for display-path diagnostics.  Changed frames are
+reported with an FNV hash, bounded distinct-color count, non-black pixel count,
+and the active GMA descriptors.  GE start/completion sequence markers are also
+emitted.  Diverse frames exit the classifier early between periodic reports,
+so the oracle remains inexpensive during emulator workloads.  The Linux
+project's `smoke-linux-gpsp` target enables this automatically and rejects
+blank/stale scanout and GE ownership violations.
+
 The default firmware directory is:
 
 ```sh
