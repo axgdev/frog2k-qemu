@@ -1018,15 +1018,28 @@ static void sf2000_audio_callback(void *opaque, int free)
             size_t available = sf2000_audio_dma_queued;
             size_t guest_written = MIN((size_t)bytes / channels, available);
             uint32_t old_consumer = sf2000_audio_dma_consumer;
-            uint32_t period_bytes = 0;
+            uint32_t period_frames = 0;
+            uint32_t period_bytes;
 
             sf2000_audio_dma_consumer =
                 (sf2000_audio_dma_consumer + guest_written) %
                 sf2000_audio_dma_bytes;
             sf2000_audio_dma_queued -= guest_written;
+            /*
+             * Physical HC1512 raises the SND0 service event substantially
+             * more often than the programmed PCM period.  Keep it distinct
+             * from the +0x0c period latch so guests must coalesce by cursor.
+             */
+            if (guest_written) {
+                sf2000_audio_snd_ctl08 |= BIT(16);
+                sf2000_mmio_set32(SF2000_AUDIO_I2S_BASE + 0x08,
+                                  sf2000_audio_snd_ctl08);
+            }
             sf2000_mmio_get32(SF2000_AUDIO_I2S_BASE + 0x5c,
-                              &period_bytes);
-            period_bytes &= 0xffffu;
+                              &period_frames);
+            period_frames &= 0xffffu;
+            /* SND0 +0x5c is in PCM frames; mono S16 is two bytes/frame. */
+            period_bytes = period_frames * sizeof(int16_t);
             if (period_bytes && guest_written &&
                 old_consumer / period_bytes !=
                     sf2000_audio_dma_consumer / period_bytes) {
