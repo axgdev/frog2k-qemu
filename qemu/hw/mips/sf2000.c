@@ -207,6 +207,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_IRC_IRQ         (1u << SF2000_IRC_IRQ_BIT)
 #define SF2000_SDIO_IRQ_BIT    10
 #define SF2000_SDIO_IRQ        (1u << SF2000_SDIO_IRQ_BIT)
+#define SF2000_SND_IRQ_BIT     5
+#define SF2000_SND_IRQ         (1u << SF2000_SND_IRQ_BIT)
 #define SF2000_USB1_DMA_IRQ2   BIT(18)
 #define SF2000_USB1_MC_IRQ2    BIT(19)
 #define SF2000_USB0_DMA_IRQ2   BIT(20)
@@ -409,6 +411,8 @@ static bool sf2000_usb_link_active[2];
 static uint32_t sf2000_usb_power_reg[2];
 static uint32_t sf2000_usb_devctl_reg[2];
 static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
+static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
+static void sf2000_update_irq(void);
 static uint32_t sf2000_panel_sample_readback_l(SF2000LCDState *s,
                                                uint32_t value);
 static uint32_t sf2000_panel_sample_readback_t(SF2000LCDState *s,
@@ -472,6 +476,14 @@ static bool sf2000_audio_dma_configured(void)
            (sf2000_audio_snd_ctl04 & (BIT(0) | BIT(8) | BIT(16))) ==
                (BIT(0) | BIT(8) | BIT(16)) &&
            pll == SF2000_AUDIO_PLL_32K && (gate & BIT(14));
+}
+
+static bool sf2000_audio_irq_pending(void)
+{
+    return ((sf2000_audio_snd_ctl08 & (BIT(16) | BIT(0))) ==
+            (BIT(16) | BIT(0))) ||
+           ((sf2000_audio_snd_ctl0c & (BIT(8) | BIT(0))) ==
+            (BIT(8) | BIT(0)));
 }
 
 static bool sf2000_audio_output_active(void)
@@ -939,6 +951,7 @@ static void sf2000_audio_callback(void *opaque, int free)
         size_t frames = MIN((size_t)free / (sizeof(int16_t) * channels),
                             ARRAY_SIZE(sample_buf) / channels);
         size_t bytes;
+        bool dma_underrun = false;
 
         if (!frames) {
             break;
@@ -955,6 +968,7 @@ static void sf2000_audio_callback(void *opaque, int free)
                                sf2000_audio_dma_bytes -
                                sf2000_audio_dma_consumer);
 
+            dma_underrun = guest_bytes < frames * sizeof(int16_t);
             cpu_physical_memory_read(sf2000_audio_dma_base +
                                      sf2000_audio_dma_consumer,
                                      sample_buf, first);
@@ -1000,11 +1014,35 @@ static void sf2000_audio_callback(void *opaque, int free)
             (sf2000_audio_snd_ctl50 & BIT(29))) {
             size_t available = sf2000_audio_dma_queued;
             size_t guest_written = MIN((size_t)bytes / channels, available);
+            uint32_t old_consumer = sf2000_audio_dma_consumer;
+            uint32_t period_bytes = 0;
 
             sf2000_audio_dma_consumer =
                 (sf2000_audio_dma_consumer + guest_written) %
                 sf2000_audio_dma_bytes;
             sf2000_audio_dma_queued -= guest_written;
+            sf2000_mmio_get32(SF2000_AUDIO_I2S_BASE + 0x5c,
+                              &period_bytes);
+            period_bytes &= 0xffffu;
+            if (period_bytes && guest_written &&
+                old_consumer / period_bytes !=
+                    sf2000_audio_dma_consumer / period_bytes) {
+                sf2000_audio_snd_ctl0c |= BIT(8);
+                sf2000_mmio_set32(SF2000_AUDIO_I2S_BASE + 0x0c,
+                                  sf2000_audio_snd_ctl0c);
+            }
+            /*
+             * HC1512 disarms SND0 after consuming an empty producer ring.
+             * The vendor transfer path republishes the cursor and sets bit
+             * 16 again.  Preserve that behavior so QEMU catches drivers that
+             * only arm the engine once and then silently stall in hardware.
+             */
+            if (dma_underrun && sf2000_audio_dma_queued == 0) {
+                sf2000_audio_snd_ctl04 &= ~BIT(16);
+                sf2000_mmio_set32(SF2000_AUDIO_I2S_BASE + 0x04,
+                                  sf2000_audio_snd_ctl04);
+            }
+            sf2000_update_irq();
         }
         free -= bytes;
         if (bytes < frames * sizeof(int16_t) * channels) {
@@ -1256,7 +1294,6 @@ static void sf2000_gma_present(uint32_t dmba_addr);
 static void sf2000_lcd_update(void *opaque);
 static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
                                          bool dump_frame);
-static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
 
 static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
 {
@@ -3001,6 +3038,8 @@ static void sf2000_update_irq(void)
                   sf2000_irq1_enabled(SF2000_I2C1_IRQ)) ||
                  (sf2000_irc_irq_pending() &&
                   sf2000_irq1_enabled(SF2000_IRC_IRQ)) ||
+                 (sf2000_audio_irq_pending() &&
+                  sf2000_irq1_enabled(SF2000_SND_IRQ)) ||
                  (sf2000_sb_timer_pending() && !sf2000_sb_timer_irq_masked) ||
                  (sf2000_sdio_irq_pending &&
                   sf2000_irq1_enabled(SF2000_SDIO_IRQ)));
@@ -5810,6 +5849,9 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         if (sf2000_irc_irq_pending()) {
             value |= SF2000_IRC_IRQ;
         }
+        if (sf2000_audio_irq_pending()) {
+            value |= SF2000_SND_IRQ;
+        }
         if (sf2000_sdio_irq_pending) {
             value |= SF2000_SDIO_IRQ;
             /*
@@ -6250,9 +6292,19 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x04) {
         sf2000_audio_snd_ctl04 = value;
     } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x08) {
-        sf2000_audio_snd_ctl08 = value;
+        uint32_t status_mask = BIT(16) | BIT(24) | BIT(27) | BIT(28);
+        uint32_t status = sf2000_audio_snd_ctl08 & status_mask;
+
+        status &= ~(value & status_mask);
+        sf2000_audio_snd_ctl08 = (value & ~status_mask) | status;
+        sf2000_mmio_set32(full_addr, sf2000_audio_snd_ctl08);
     } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x0c) {
-        sf2000_audio_snd_ctl0c = value;
+        uint32_t status_mask = BIT(8) | BIT(24);
+        uint32_t status = sf2000_audio_snd_ctl0c & status_mask;
+
+        status &= ~(value & status_mask);
+        sf2000_audio_snd_ctl0c = (value & ~status_mask) | status;
+        sf2000_mmio_set32(full_addr, sf2000_audio_snd_ctl0c);
     } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x50) {
         sf2000_audio_snd_ctl50 = value;
     } else if (full_addr == SF2000_AUDIO_I2S_CTRL3C) {
