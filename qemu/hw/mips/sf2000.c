@@ -148,7 +148,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_AUDIO_SYS_GATE  0x18800154ULL
 #define SF2000_AUDIO_PLL_32K   0x0c000120u
 #define SF2000_AUDIO_DMA_CFG_MASK 0x0f330000u
-#define SF2000_AUDIO_DMA_MONO_S16 0x0b100000u
+#define SF2000_AUDIO_DMA_MONO_S16 0x09100000u
 #define SF2000_SND_DAC_BASE    0x1880b000ULL
 #define SF2000_SND_DAC_SIZE    0x00000100ULL
 #define SF2000_USB0_BASE       0x18844000ULL
@@ -455,6 +455,7 @@ static uint32_t sf2000_audio_snd_ctl0c;
 static uint32_t sf2000_audio_snd_ctl50;
 static bool sf2000_audio_dma_reported;
 static bool sf2000_audio_callback_reported;
+static bool sf2000_audio_apll_reset_seen;
 
 static bool sf2000_audio_dma_configured(void)
 {
@@ -468,14 +469,16 @@ static bool sf2000_audio_dma_configured(void)
 
     /*
      * HC15xx SND0 mono S16_LE contract recovered from libauddrv:
-     * mono channel code 0, S16 format code 1, mono packing, left
-     * alignment, DMA enable, 12.288 MHz I2S clock and its gate.
+     * mono channel code 0, S16 format code 1, mono packing, DMA enable,
+     * 12.288 MHz I2S clock and its gate.  Bit 25 is the stereo-channel
+     * selector and must be clear for the SF2000's one-channel stream.
      */
     return (dma & SF2000_AUDIO_DMA_CFG_MASK) ==
                SF2000_AUDIO_DMA_MONO_S16 &&
            (sf2000_audio_snd_ctl04 & (BIT(0) | BIT(8) | BIT(16))) ==
                (BIT(0) | BIT(8) | BIT(16)) &&
-           pll == SF2000_AUDIO_PLL_32K && (gate & BIT(14));
+           pll == SF2000_AUDIO_PLL_32K && (gate & BIT(14)) &&
+           sf2000_audio_apll_reset_seen;
 }
 
 static bool sf2000_audio_irq_pending(void)
@@ -6168,6 +6171,10 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         mask <<= shift;
         sf2000_regs[i].value = (old_value & ~mask) |
                                (((uint32_t)value << shift) & mask);
+        if ((full_addr & ~3u) == 0x18800080 &&
+            (old_value & BIT(5)) && !(sf2000_regs[i].value & BIT(5))) {
+            sf2000_audio_apll_reset_seen = true;
+        }
     }
     if (size == 4 && ((full_addr >= 0x18808000 &&
                        full_addr <= 0x188081ec) ||
@@ -7637,6 +7644,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_audio_snd_ctl50 = 0;
     sf2000_audio_dma_reported = false;
     sf2000_audio_callback_reported = false;
+    sf2000_audio_apll_reset_seen = false;
 
     cpu_reset(CPU(cpu));
 
