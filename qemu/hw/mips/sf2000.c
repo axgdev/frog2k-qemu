@@ -1512,6 +1512,8 @@ static QEMUTimer *sf2000_irq_poll_timer;
 static QEMUTimer *sf2000_ge_timer;
 static bool sf2000_ge_irq_pending;
 static uint64_t sf2000_ge_submit_sequence;
+static uint64_t sf2000_ge_irq_ack_sequence;
+static uint32_t sf2000_ge_queue_min;
 static MemoryRegion *sf2000_ram_region;
 static bool sf2000_bootrom_ram_entry;
 static uint8_t sf2000_sflash_cmd;
@@ -4333,8 +4335,15 @@ static void sf2000_ge_timer_cb(void *opaque)
 static void sf2000_ge_start_queue(void)
 {
     uint32_t status = 0;
+    uint32_t first = 0;
+    uint32_t last = 0;
 
     sf2000_mmio_get32(SF2000_GE_STATUS, &status);
+    sf2000_mmio_get32(SF2000_GE_HQ_FIRST, &first);
+    sf2000_mmio_get32(SF2000_GE_HQ_LAST, &last);
+    if (!sf2000_ge_queue_min || first < sf2000_ge_queue_min) {
+        sf2000_ge_queue_min = first;
+    }
     if (status & SF2000_GE_STATUS_BUSY) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "sf2000: GE doorbell while command queue busy\n");
@@ -4348,12 +4357,21 @@ static void sf2000_ge_start_queue(void)
     if (sf2000_scanout_oracle() &&
         (sf2000_ge_submit_sequence <= 8 ||
          !(sf2000_ge_submit_sequence % 300))) {
+        uint32_t context[7] = { 0 };
+
+        if (sf2000_ge_queue_min >= (8 + 256) * sizeof(uint32_t)) {
+            sf2000_ge_read_node(sf2000_ge_queue_min -
+                                (8 + 256) * sizeof(uint32_t),
+                                context, ARRAY_SIZE(context));
+        }
         qemu_log_mask(LOG_UNIMP,
                       "sf2000: ge-queue start seq=%" PRIu64
-                      " latency_ns=%" PRId64 " status=%08x\n",
+                      " first=%08x last=%08x latency_ns=%" PRId64
+                      " status=%08x producer=%08x wrap_at=%08x\n",
                       sf2000_ge_submit_sequence,
+                      first, last,
                       (int64_t)SF2000_GE_LATENCY_NS,
-                      status);
+                      status, context[6], context[5]);
     }
     sf2000_update_irq();
     timer_mod(sf2000_ge_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
@@ -6321,6 +6339,36 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         mask <<= shift;
         sf2000_regs[i].value = (old_value & ~mask) |
                                (((uint32_t)value << shift) & mask);
+        /*
+         * HQ_FIRST is a hardware consumer pointer.  HC15xx only permits it
+         * to move backwards after the producer publishes the vendor ring
+         * wrap contract in the command-buffer context immediately preceding
+         * phy_addr_min.  A Linux driver once rewound this register without
+         * point_wrap_addr; the permissive model accepted it while physical
+         * hardware permanently stalled.
+         */
+        if ((full_addr & ~3u) == SF2000_GE_HQ_FIRST && size == 4 &&
+            sf2000_regs[i].value < old_value) {
+            enum { GE_CMDQ_CONTEXT_BYTES = (8 + 256) * sizeof(uint32_t) };
+            uint32_t context[7];
+            uint32_t new_first = sf2000_regs[i].value;
+            bool valid = new_first >= GE_CMDQ_CONTEXT_BYTES &&
+                sf2000_ge_read_node(new_first - GE_CMDQ_CONTEXT_BYTES,
+                                    context, ARRAY_SIZE(context)) &&
+                context[0] == new_first &&
+                context[1] > context[0] &&
+                context[5] == old_value &&
+                (context[6] & ~1u) >= context[0] &&
+                (context[6] & ~1u) <= context[1];
+
+            if (!valid) {
+                sf2000_regs[i].value = old_value;
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "sf2000: GE invalid unmarked ring rewind "
+                              "first=0x%08x requested=0x%08x\n",
+                              old_value, new_first);
+            }
+        }
         if ((full_addr & ~3u) == 0x18800080 &&
             (old_value & BIT(5)) && !(sf2000_regs[i].value & BIT(5))) {
             sf2000_audio_apll_reset_seen = true;
@@ -6553,6 +6601,19 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             sf2000_mmio_set32(SF2000_GE_STATUS, status);
             sf2000_ge_irq_pending =
                 (status & SF2000_GE_STATUS_DONE) != 0;
+            if ((old_value & SF2000_GE_STATUS_DONE) &&
+                (value & SF2000_GE_STATUS_DONE)) {
+                sf2000_ge_irq_ack_sequence++;
+                if (sf2000_scanout_oracle() &&
+                    (sf2000_ge_irq_ack_sequence <= 8 ||
+                     !(sf2000_ge_irq_ack_sequence % 300))) {
+                    qemu_log_mask(LOG_UNIMP,
+                                  "sf2000: ge-queue irq-ack seq=%" PRIu64
+                                  " submitted=%" PRIu64 "\n",
+                                  sf2000_ge_irq_ack_sequence,
+                                  sf2000_ge_submit_sequence);
+                }
+            }
             sf2000_update_irq();
         } else if ((full_addr & ~3u) == SF2000_GE_CTRL) {
             sf2000_mmio_set32(SF2000_GE_CTRL, sf2000_regs[i].value &
@@ -7838,6 +7899,8 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_wdt_disable();
     sf2000_ge_irq_pending = false;
     sf2000_ge_submit_sequence = 0;
+    sf2000_ge_irq_ack_sequence = 0;
+    sf2000_ge_queue_min = 0;
     if (sf2000_ge_timer) {
         timer_del(sf2000_ge_timer);
     }
