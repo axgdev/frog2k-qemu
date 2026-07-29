@@ -177,7 +177,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GE_STATUS_BUSY  BIT(31)
 #define SF2000_GE_IRQ_BIT      4
 #define SF2000_GE_IRQ          BIT(SF2000_GE_IRQ_BIT)
-#define SF2000_GE_LATENCY_NS   (NANOSECONDS_PER_SECOND / 1000)
+/*
+ * A full-screen HC15xx blit completes well inside one 60 Hz frame.  Keeping
+ * this at 100 us preserves asynchronous completion without manufacturing the
+ * command-ring backlog caused by the old, pessimistic 1 ms placeholder.
+ */
+#define SF2000_GE_LATENCY_NS   (NANOSECONDS_PER_SECOND / 10000)
 #define SF2000_GE_QUEUE_DUMP_WORDS 192
 #define SF2000_GE_QUEUE_DUMP_DEFAULT 0
 #define SF2000_GMA_BASE        0x18808000ULL
@@ -1648,7 +1653,7 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
     { 0x047c0050, 0x047d0000, "storage_probe" },
 };
 
-#define SF2000_PROGRESS_PHYS      0x013f0000ULL
+#define SF2000_PROGRESS_PHYS      0x07a00000ULL
 #define SF2000_PROGRESS_MAGIC     0x52504653U
 #define SF2000_PROGRESS_VERSION   1U
 #define SF2000_PROGRESS_ENTRIES   1024U
