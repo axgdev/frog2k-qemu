@@ -4596,12 +4596,38 @@ static void sf2000_uart_put(unsigned index, uint8_t ch)
 static uint32_t sf2000_gpio_l_sample(uint32_t value)
 {
     CPUState *cs = first_cpu;
+    uint32_t dir = 0;
     unsigned index = sf2000_key_shift_index % SF2000_KEY_COUNT;
 
-    if (sf2000_key_mask & BIT(index)) {
-        value &= ~BIT(SF2000_KEY_DATA_BIT);
-    } else {
-        value |= BIT(SF2000_KEY_DATA_BIT);
+    /*
+     * GB300 scans a separate 16-bit two-wire shifter on L25/L27/L26.  The
+     * board-profile model used to expose only the SF2000 L23/L24 shifter,
+     * which made Linux's otherwise real automatic board probe select SF2000
+     * even when QEMU was explicitly configured as GB300.  Keep the two buses
+     * electrically distinct: the direction pattern is the same one used by
+     * sf2000-pad.c while the GB300 transaction is in its read phase.
+     */
+    if (strcmp(sf2000_board_profile_name(), "gb300") == 0 &&
+        sf2000_mmio_get32(SF2000_GPIO_L_DIR, &dir) &&
+        (dir & BIT(26)) && !(dir & BIT(25)) && !(dir & BIT(27))) {
+        static const int8_t gb300_key_for_shift[16] = {
+            -1, 0, 1, 2, 3, 4, 5, 6,
+            7, 8, 9, 10, 11, -1, -1, -1,
+        };
+        int8_t key = gb300_key_for_shift[
+            sf2000_key_shift_index % ARRAY_SIZE(gb300_key_for_shift)];
+
+        value |= BIT(25) | BIT(27);
+        if (key >= 0 && (sf2000_key_mask & BIT((unsigned)key)))
+            value &= ~BIT(27);
+    }
+
+    if (!(dir & BIT(26))) {
+        if (sf2000_key_mask & BIT(index)) {
+            value &= ~BIT(SF2000_KEY_DATA_BIT);
+        } else {
+            value |= BIT(SF2000_KEY_DATA_BIT);
+        }
     }
 
     if (g_getenv("SF2000_TRACE_KEYS") && cs) {
@@ -6073,6 +6099,8 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
                 break;
             }
         }
+        if (strcmp(sf2000_board_profile_name(), "gb300") == 0)
+            value |= BIT(27);
         /*
          * L08 is the panel's TE input.  Linux's userspace screen polls this
          * pin after taking ownership from the kernel GPIO IRQ, so keep the
