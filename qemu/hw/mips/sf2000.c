@@ -149,7 +149,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_AUDIO_PLL_32K   0x0c000120u
 #define SF2000_AUDIO_DMA_CFG_MASK 0x0f330000u
 #define SF2000_AUDIO_DMA_MONO_S16 0x09100000u
-#define SF2000_AUDIO_DMA_STEREO_S16 0x0a100000u
+#define SF2000_AUDIO_DMA_STEREO_S16 0x0b110000u
 #define SF2000_SND_DAC_BASE    0x1880b000ULL
 #define SF2000_SND_DAC_SIZE    0x00000100ULL
 #define SF2000_USB0_BASE       0x18844000ULL
@@ -533,8 +533,9 @@ static bool sf2000_audio_dma_configured(void)
     sf2000_mmio_get32(SF2000_AUDIO_SYS_GATE, &gate);
 
     /*
-     * HC15xx SND0 S16_LE contracts recovered from libauddrv.  SF2000 uses
-     * mono packing; GB300's stock route uses two S16 slots with bit 25 set.
+     * HC15xx SND0 S16_LE contracts recovered from libauddrv.  In the GB300
+     * value, bits 16..17 encode two channels, bit 25 is left alignment, and
+     * bit 24 is the freerun-path packing flag.  Bit 25 is not a channel bit.
      */
     return sf2000_audio_dma_channels() != 0 &&
            (sf2000_audio_snd_ctl04 & (BIT(0) | BIT(8) | BIT(16))) ==
@@ -1184,6 +1185,40 @@ restore:
     sf2000_audio_powered = saved_powered;
     sf2000_audio_i2s_fade90 = saved_fade;
     sf2000_audio_set_backend_active();
+}
+
+static void sf2000_audio_dma_format_selftest(void)
+{
+    uint32_t saved = 0;
+
+    sf2000_mmio_get32(SF2000_AUDIO_I2S_BASE + 0x34, &saved);
+    sf2000_mmio_set32(SF2000_AUDIO_I2S_BASE + 0x34,
+                      SF2000_AUDIO_DMA_MONO_S16);
+    if (sf2000_audio_dma_channels() != 1) {
+        error_report("sf2000: audio DMA format selftest failed mono=0x%08x",
+                     SF2000_AUDIO_DMA_MONO_S16);
+        goto restore;
+    }
+    sf2000_mmio_set32(SF2000_AUDIO_I2S_BASE + 0x34,
+                      SF2000_AUDIO_DMA_STEREO_S16);
+    if (sf2000_audio_dma_channels() != 2) {
+        error_report("sf2000: audio DMA format selftest failed stereo=0x%08x",
+                     SF2000_AUDIO_DMA_STEREO_S16);
+        goto restore;
+    }
+    /* Bit 25 is alignment, not the stereo channel code. */
+    sf2000_mmio_set32(SF2000_AUDIO_I2S_BASE + 0x34, 0x0a100000u);
+    if (sf2000_audio_dma_channels() != 0) {
+        error_report("sf2000: audio DMA format selftest accepted invalid alignment-only stereo");
+        goto restore;
+    }
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: audio DMA format selftest ok mono=0x%08x stereo=0x%08x\n",
+                  SF2000_AUDIO_DMA_MONO_S16,
+                  SF2000_AUDIO_DMA_STEREO_S16);
+
+restore:
+    sf2000_mmio_set32(SF2000_AUDIO_I2S_BASE + 0x34, saved);
 }
 
 static void sf2000_audio_backend_init(MachineState *machine)
@@ -8232,6 +8267,7 @@ static void sf2000_init(MachineState *machine)
     sf2000_usb_regs[1][0x384 >> 2] = sf2000_board_profile_spec()->usb_phy384;
     sf2000_audio_state_selftest();
     sf2000_audio_pcm_selftest();
+    sf2000_audio_dma_format_selftest();
     sf2000_audio_gate_live_selftest();
     sf2000_audio_gate_live_variant_selftest();
     sf2000_audio_hw_close_selftest();

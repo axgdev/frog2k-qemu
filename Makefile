@@ -539,9 +539,10 @@ smoke-gb300-display: build check-gb300-asd
 		-d guest_errors,unimp -D build/logs/smoke-gb300-display.log \
 	> build/logs/smoke-gb300-display.console 2>&1 || test $$? -eq 124
 	grep -q 'sf2000: loaded ASD' build/logs/smoke-gb300-display.console
-	grep -q 'sr=32000 ch=1 runtime_ch=2 pwm2_backlight_active=true' build/logs/smoke-gb300-display.console
+	grep -q 'sr=32000 ch=2 runtime_ch=2 pwm2_backlight_active=true' build/logs/smoke-gb300-display.console
 	grep -q 'sf2000: audio state selftest ok board=gb300' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: audio pcm selftest ok board=gb300 sample0=2048 sample1=-2048' build/logs/smoke-gb300-display.log
+	grep -q 'sf2000: audio DMA format selftest ok mono=0x09100000 stereo=0x0b110000' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: audio gate live variant selftest ok board=gb300' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: audio hw close selftest ok board=gb300 backend=2 snd0=0x14fc0082 dac=0x420003a8 hw_ret=-1 dma=0x00000000/0 hw_rate=0 hw_ch=0 hw_fmt=0 hw_period=0 hw_periods=0' build/logs/smoke-gb300-display.log
 	grep -q 'sf2000: pwm2 backlight selftest ok board=gb300 clk=0xc0010000 lohi=0x05470547 ctrl=0x00000090' build/logs/smoke-gb300-display.log
