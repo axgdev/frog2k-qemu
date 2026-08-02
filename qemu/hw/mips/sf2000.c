@@ -556,7 +556,7 @@ static bool sf2000_audio_speaker_enabled(void)
                sf2000_mmio_get32(SF2000_GPIO_L_DIR, &direction) &&
                sf2000_mmio_get32(SF2000_PINMUX_L15 & ~3u, &pinmux) &&
                (direction & SF2000_GPIO_L15) &&
-               (output & SF2000_GPIO_L15) &&
+               !(output & SF2000_GPIO_L15) &&
                ((pinmux >> 24) & 0xff) == 0;
     }
 
