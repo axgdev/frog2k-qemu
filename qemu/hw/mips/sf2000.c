@@ -232,6 +232,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GPIO_L_IN       0x18800050ULL
 #define SF2000_GPIO_L_OUT      0x18800054ULL
 #define SF2000_GPIO_L_DIR      0x18800058ULL
+#define SF2000_GPIO_L15        BIT(15)
 #define SF2000_GPIO_L_ISR      0x1880005cULL
 #define SF2000_GPIO_L08        BIT(8)
 #define SF2000_GPIO_R_IN       0x188000f0ULL
@@ -241,6 +242,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GPIO_R_POK      BIT(30)
 #define SF2000_GPIO_R07        BIT(7)
 #define SF2000_PINMUX_R07      0x188004e7ULL
+#define SF2000_PINMUX_L15      0x188004afULL
 #define SF2000_KEY_DATA_BIT    23
 #define SF2000_KEY_CLK_BIT     24
 #define SF2000_KEY_COUNT       12
@@ -372,7 +374,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_gate_route = "gb300_l15",
         .audio_gate_l0 = 0x350084fe,
         .audio_gate_l1 = 0x25c085b3,
-        .audio_gate_l1_active = 0x25c005b3,
+        .audio_gate_l1_active = 0x25c085b3,
         .audio_gate_r0 = 0x00000020,
         .audio_gate_r1 = 0x00000020,
         .audio_gate_r1_active = 0x00000020,
@@ -548,6 +550,15 @@ static bool sf2000_audio_speaker_enabled(void)
     uint32_t output = 0;
     uint32_t direction = 0;
     uint32_t pinmux = 0;
+
+    if (strcmp(sf2000_board_profile_name(), "gb300") == 0) {
+        return sf2000_mmio_get32(SF2000_GPIO_L_OUT, &output) &&
+               sf2000_mmio_get32(SF2000_GPIO_L_DIR, &direction) &&
+               sf2000_mmio_get32(SF2000_PINMUX_L15 & ~3u, &pinmux) &&
+               (direction & SF2000_GPIO_L15) &&
+               (output & SF2000_GPIO_L15) &&
+               ((pinmux >> 24) & 0xff) == 0;
+    }
 
     return sf2000_mmio_get32(SF2000_GPIO_R_OUT, &output) &&
            sf2000_mmio_get32(SF2000_GPIO_R_DIR, &direction) &&
@@ -1332,6 +1343,7 @@ struct SF2000LCDState {
     uint16_t panel_y1;
     uint16_t panel_x;
     uint16_t panel_y;
+    uint8_t panel_madctl;
     uint8_t panel_ramctrl[2];
     uint8_t panel_ramctrl_count;
     uint8_t panel_readback[5];
@@ -1368,6 +1380,101 @@ static void sf2000_gma_present(uint32_t dmba_addr);
 static void sf2000_lcd_update(void *opaque);
 static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
                                          bool dump_frame);
+
+static bool sf2000_panel_is_gb300(void)
+{
+    return strcmp(sf2000_board_profile_name(), "gb300") == 0;
+}
+
+static unsigned sf2000_panel_surface_width(const SF2000LCDState *s)
+{
+    return s->width ? s->width :
+        (sf2000_panel_is_gb300() ? 240u : SF2000_LCD_WIDTH);
+}
+
+static unsigned sf2000_panel_surface_height(const SF2000LCDState *s)
+{
+    return s->height ? s->height :
+        (sf2000_panel_is_gb300() ? 320u : SF2000_LCD_HEIGHT);
+}
+
+static unsigned sf2000_panel_raw_width(const SF2000LCDState *s)
+{
+    return sf2000_panel_is_gb300() ? 240u : sf2000_panel_surface_width(s);
+}
+
+static unsigned sf2000_panel_raw_height(const SF2000LCDState *s)
+{
+    return sf2000_panel_is_gb300() ? 320u : sf2000_panel_surface_height(s);
+}
+
+static uint32_t sf2000_panel_color(const SF2000LCDState *s, uint32_t color)
+{
+    uint32_t red;
+    uint32_t blue;
+
+    /* MADCTL bit 3 selects BGR ordering on the physical ST7789 bus. */
+    if (!s || !(s->panel_madctl & BIT(3))) {
+        return color;
+    }
+    red = (color >> 16) & 0xff;
+    blue = color & 0xff;
+    return (color & 0xff00ff00u) | blue << 16 | red;
+}
+
+static void sf2000_panel_map_raw(const SF2000LCDState *s,
+                                 unsigned raw_x, unsigned raw_y,
+                                 unsigned *surface_x, unsigned *surface_y)
+{
+    unsigned surface_width = sf2000_panel_surface_width(s);
+    unsigned surface_height = sf2000_panel_surface_height(s);
+
+    /* The GB300 uses ST7789 MADCTL=0x28: MV is set, with no MX/MY flip. */
+    if (s && (s->panel_madctl & BIT(5))) {
+        *surface_x = raw_y;
+        *surface_y = raw_x;
+    } else {
+        *surface_x = raw_x;
+        *surface_y = raw_y;
+    }
+
+    if (s && (s->panel_madctl & BIT(6))) {
+        *surface_x = surface_width - 1u - *surface_x;
+    }
+    if (s && (s->panel_madctl & BIT(7))) {
+        *surface_y = surface_height - 1u - *surface_y;
+    }
+}
+
+static void sf2000_panel_store_raw(SF2000LCDState *s,
+                                   unsigned raw_x, unsigned raw_y,
+                                   uint32_t color)
+{
+    DisplaySurface *surface;
+    unsigned x;
+    unsigned y;
+
+    if (!s || raw_x >= sf2000_panel_raw_width(s) ||
+        raw_y >= sf2000_panel_raw_height(s)) {
+        return;
+    }
+    sf2000_panel_map_raw(s, raw_x, raw_y, &x, &y);
+    surface = qemu_console_surface(s->con);
+    if (surface_bits_per_pixel(surface) != 32 ||
+        surface_width(surface) != sf2000_panel_surface_width(s) ||
+        surface_height(surface) != sf2000_panel_surface_height(s)) {
+        qemu_console_resize(s->con, sf2000_panel_surface_width(s),
+                            sf2000_panel_surface_height(s));
+        surface = qemu_console_surface(s->con);
+    }
+    if (surface_bits_per_pixel(surface) != 32 ||
+        x >= surface_width(surface) || y >= surface_height(surface)) {
+        return;
+    }
+    ((uint32_t *)(surface_data(surface) + y * surface_stride(surface)))[x] =
+        sf2000_panel_color(s, color);
+    dpy_gfx_update(s->con, x, y, 1, 1);
+}
 
 static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
 {
@@ -2614,9 +2721,10 @@ static void sf2000_pwm2_backlight_blank_selftest(void)
 
     surface = qemu_console_surface(s->con);
     if (surface_bits_per_pixel(surface) != 32 ||
-        surface_width(surface) != SF2000_LCD_WIDTH ||
-        surface_height(surface) != SF2000_LCD_HEIGHT) {
-        qemu_console_resize(s->con, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
+        surface_width(surface) != sf2000_panel_surface_width(s) ||
+        surface_height(surface) != sf2000_panel_surface_height(s)) {
+        qemu_console_resize(s->con, sf2000_panel_surface_width(s),
+                            sf2000_panel_surface_height(s));
         surface = qemu_console_surface(s->con);
     }
     if (surface_bits_per_pixel(surface) != 32) {
@@ -5342,27 +5450,12 @@ static void sf2000_sdio_complete_cmd(void)
 
 static void sf2000_panel_update_rect(SF2000LCDState *s, uint16_t x, uint16_t y)
 {
-    DisplaySurface *surface;
-    uint32_t *dst;
-
-    if (!s || x >= SF2000_LCD_WIDTH || y >= SF2000_LCD_HEIGHT) {
+    if (!s || x >= sf2000_panel_raw_width(s) ||
+        y >= sf2000_panel_raw_height(s)) {
         return;
     }
-
-    surface = qemu_console_surface(s->con);
-    if (surface_bits_per_pixel(surface) != 32 ||
-        surface_width(surface) != SF2000_LCD_WIDTH ||
-        surface_height(surface) != SF2000_LCD_HEIGHT) {
-        qemu_console_resize(s->con, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
-        surface = qemu_console_surface(s->con);
-    }
-    if (surface_bits_per_pixel(surface) != 32) {
-        return;
-    }
-
-    dst = (uint32_t *)(surface_data(surface) + y * surface_stride(surface));
-    dst[x] = s->panel_pixels[y * SF2000_LCD_WIDTH + x];
-    dpy_gfx_update(s->con, x, y, 1, 1);
+    sf2000_panel_store_raw(s, x, y,
+                           s->panel_pixels[y * sf2000_panel_raw_width(s) + x]);
 }
 
 static size_t sf2000_panel_fill_readback(const SF2000BoardProfileSpec *profile,
@@ -5761,9 +5854,18 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
             s->panel_y1 = ((args[2] & 0xff) << 8) | (args[3] & 0xff);
         }
         break;
+    case 0x36: /* MADCTL: orientation and RGB/BGR bus ordering */
+        if (s->panel_data_count == 1) {
+            s->panel_madctl = value & 0xff;
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: panel MADCTL=0x%02x board=%s\n",
+                          s->panel_madctl, sf2000_board_profile_name());
+        }
+        break;
     case 0x2c:
-        if (s->panel_x < SF2000_LCD_WIDTH && s->panel_y < SF2000_LCD_HEIGHT) {
-            s->panel_pixels[s->panel_y * SF2000_LCD_WIDTH + s->panel_x] =
+        if (s->panel_x < sf2000_panel_raw_width(s) &&
+            s->panel_y < sf2000_panel_raw_height(s)) {
+            s->panel_pixels[s->panel_y * sf2000_panel_raw_width(s) + s->panel_x] =
                 sf2000_rgb565_to_surface(value);
             s->panel_pixel_count++;
             if (s->panel_pixel_count <= 16 ||
@@ -5804,6 +5906,7 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 	s->panel_data_count = 0;
 	s->panel_cmd_count++;
 	if (s->panel_cmd == 0x01) { /* SWRESET restores ST7789 RAMCTRL defaults. */
+		s->panel_madctl = sf2000_panel_is_gb300() ? 0x28 : 0x70;
 		s->panel_ramctrl[0] = 0x00;
 		s->panel_ramctrl[1] = 0xf0;
 		s->panel_ramctrl_count = 0;
@@ -5951,13 +6054,14 @@ static void sf2000_write_ppm_from_surface(SF2000LCDState *s, const char *path)
     }
 
     surface = qemu_console_surface(s->con);
-    fprintf(f, "P6\n%d %d\n255\n", SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
-    for (y = 0; y < SF2000_LCD_HEIGHT; y++) {
+    fprintf(f, "P6\n%u %u\n255\n", sf2000_panel_surface_width(s),
+            sf2000_panel_surface_height(s));
+    for (y = 0; y < (int)sf2000_panel_surface_height(s); y++) {
         const uint32_t *src = (const uint32_t *)(surface_data(surface) +
                               y * surface_stride(surface));
         int x;
 
-        for (x = 0; x < SF2000_LCD_WIDTH; x++) {
+        for (x = 0; x < (int)sf2000_panel_surface_width(s); x++) {
             uint8_t rgb[3] = {
                 (uint8_t)(src[x] >> 16),
                 (uint8_t)(src[x] >> 8),
@@ -6612,6 +6716,10 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     } else if (full_addr == SF2000_GPIO_L_OUT) {
         sf2000_gpio_l_write(sf2000_regs[i].value);
         sf2000_panel_gpio_write(full_addr, sf2000_regs[i].value);
+        sf2000_audio_set_backend_active();
+    } else if (full_addr == SF2000_GPIO_L_DIR ||
+               full_addr == SF2000_PINMUX_L15) {
+        sf2000_audio_set_backend_active();
     } else if (full_addr == 0x18800354) {
         sf2000_panel_gpio_write(full_addr, sf2000_regs[i].value);
     } else if (sf2000_ge_decode(full_addr)) {
@@ -6980,28 +7088,29 @@ static uint32_t sf2000_argb8888_to_surface(uint32_t pix)
 static void sf2000_vou_present_unlatched_background(SF2000LCDState *s)
 {
     DisplaySurface *surface = qemu_console_surface(s->con);
+    unsigned width = sf2000_panel_surface_width(s);
+    unsigned height = sf2000_panel_surface_height(s);
     int y;
 
     if (surface_bits_per_pixel(surface) != 32 ||
-        surface_width(surface) != SF2000_LCD_WIDTH ||
-        surface_height(surface) != SF2000_LCD_HEIGHT) {
-        qemu_console_resize(s->con, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
+        surface_width(surface) != width || surface_height(surface) != height) {
+        qemu_console_resize(s->con, width, height);
         surface = qemu_console_surface(s->con);
     }
     if (surface_bits_per_pixel(surface) != 32) {
         return;
     }
-    for (y = 0; y < SF2000_LCD_HEIGHT; y++) {
+    for (y = 0; y < (int)height; y++) {
         uint32_t *dst = (uint32_t *)(surface_data(surface) +
                         y * surface_stride(surface));
         int x;
 
-        for (x = 0; x < SF2000_LCD_WIDTH; x++) {
+        for (x = 0; x < (int)width; x++) {
             /* Visually distinguish the physical VPO fallback from scanout. */
             dst[x] = 0xff800080u;
         }
     }
-    dpy_gfx_update(s->con, 0, 0, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
+    dpy_gfx_update(s->con, 0, 0, width, height);
     if (s->vou_latch_stage < 10 && !s->vou_unlatched_logged) {
         s->vou_unlatched_logged = true;
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -7034,10 +7143,14 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     uint32_t rgb_clock_gate = 0;
     uint32_t vou_ctrl = 0;
     uint32_t vou_mode = 0;
+    unsigned surface_width_value;
+    unsigned surface_height_value;
 
     if (!s || !dmba_addr) {
         return 0;
     }
+    surface_width_value = sf2000_panel_surface_width(s);
+    surface_height_value = sf2000_panel_surface_height(s);
     if (s->vou_latch_stage < 10 && s->vou_setup_seen) {
         sf2000_vou_present_unlatched_background(s);
         return 0;
@@ -7149,13 +7262,13 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     src_h = (d4 >> 16) & 0xfff;
     pitch = (d5 >> 16) & 0x3fff;
 
-    if (ex < sx || ey < sy || sx >= SF2000_LCD_WIDTH ||
-        sy >= SF2000_LCD_HEIGHT || !d7) {
+    if (ex < sx || ey < sy || sx >= surface_width_value ||
+        sy >= surface_height_value || !d7) {
         return d6;
     }
 
-    width = MIN(ex - sx + 1, (uint32_t)SF2000_LCD_WIDTH - sx);
-    height = MIN(ey - sy + 1, (uint32_t)SF2000_LCD_HEIGHT - sy);
+    width = MIN(ex - sx + 1, surface_width_value - sx);
+    height = MIN(ey - sy + 1, surface_height_value - sy);
     if (src_w && width > src_w) {
         width = src_w;
     }
@@ -7232,9 +7345,10 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
 
     surface = qemu_console_surface(s->con);
     if (surface_bits_per_pixel(surface) != 32 ||
-        surface_width(surface) != SF2000_LCD_WIDTH ||
-        surface_height(surface) != SF2000_LCD_HEIGHT) {
-        qemu_console_resize(s->con, SF2000_LCD_WIDTH, SF2000_LCD_HEIGHT);
+        surface_width(surface) != surface_width_value ||
+        surface_height(surface) != surface_height_value) {
+        qemu_console_resize(s->con, surface_width_value,
+                            surface_height_value);
         surface = qemu_console_surface(s->con);
     }
     if (surface_bits_per_pixel(surface) != 32) {
@@ -7249,8 +7363,6 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     }
     backlight_active = sf2000_pwm2_backlight_active();
     for (y = 0; y < height; y++) {
-        uint32_t *dst = (uint32_t *)(surface_data(surface) +
-                        (sy + y) * surface_stride(surface)) + sx;
         uint32_t src_y = scale_y ? ((uint64_t)y * sample_h) / height :
                          (uint32_t)y;
         int x;
@@ -7264,23 +7376,27 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         for (x = 0; x < width; x++) {
             uint32_t src_x = scale_x ? ((uint64_t)x * sample_w) / width :
                              (uint32_t)x;
+            uint32_t color;
 
             if (mode == 0x06) {
-                dst[x] = sf2000_rgb565_to_surface(
+                color = sf2000_rgb565_to_surface(
                     lduw_le_p(linebuf + src_x * 2));
             } else if (mode == 0x01) {
-                dst[x] = sf2000_argb8888_to_surface(
+                color = sf2000_argb8888_to_surface(
                     ldl_le_p(linebuf + src_x * 4));
             } else if (have_palette) {
-                dst[x] = sf2000_argb8888_to_surface(
+                color = sf2000_argb8888_to_surface(
                     ldl_le_p(s->gma_palette + linebuf[src_x] * 4));
             } else {
                 uint8_t c = linebuf[src_x];
-                dst[x] = 0xff000000u | (c << 16) | (c << 8) | c;
+                color = 0xff000000u | (c << 16) | (c << 8) | c;
             }
             if (!backlight_active) {
-                dst[x] = 0xff000000u;
+                color = 0xff000000u;
             }
+            ((uint32_t *)(surface_data(surface) +
+                          (sy + y) * surface_stride(surface)))[sx + x] =
+                sf2000_panel_color(s, color);
         }
     }
     g_free(linebuf_alloc);
@@ -7387,7 +7503,8 @@ static void sf2000_lcd_update(void *opaque)
         return;
     }
 
-    if (surface_bits_per_pixel(surface) != 32) {
+    if (surface_bits_per_pixel(surface) != 32 ||
+        surface_width(surface) != width || surface_height(surface) != height) {
         qemu_console_resize(s->con, width, height);
         surface = qemu_console_surface(s->con);
         if (surface_bits_per_pixel(surface) != 32) {
@@ -7410,7 +7527,7 @@ static void sf2000_lcd_update(void *opaque)
 
         for (x = 0; x < width; x++) {
             uint16_t pix = lduw_le_p(linebuf + x * 2);
-            dst[x] = sf2000_rgb565_to_surface(pix);
+            dst[x] = sf2000_panel_color(s, sf2000_rgb565_to_surface(pix));
         }
     }
     g_free(linebuf);
@@ -7649,8 +7766,9 @@ static void sf2000_lcd_realize(DeviceState *dev, Error **errp)
     timer_mod(s->scanout_timer,
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
               NANOSECONDS_PER_SECOND / 30);
-    s->panel_x1 = SF2000_LCD_WIDTH - 1;
-    s->panel_y1 = SF2000_LCD_HEIGHT - 1;
+    s->panel_madctl = sf2000_panel_is_gb300() ? 0x28 : 0x70;
+    s->panel_x1 = sf2000_panel_raw_width(s) - 1;
+    s->panel_y1 = sf2000_panel_raw_height(s) - 1;
     /* The stock ASD inherits the bootloader's already-active RGB handoff. */
     s->gpio54 = 0x040004b2;
     s->panel_wr = !!(s->gpio54 & BIT(7));
