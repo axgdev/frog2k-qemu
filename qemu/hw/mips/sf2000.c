@@ -7292,7 +7292,8 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
      * hides the Linux bank-address bug which produced a live scrambled raster
      * on physical SF2000 hardware.
      */
-    if (s->vou_setup_seen && s->panel_rgb_handoff_synchronized &&
+    if (s->vou_setup_seen && s->panel_ramctrl_explicit &&
+        s->panel_rgb_handoff_synchronized &&
         sf2000_mmio_get32(0x188004a4, &rgb_clock_pinmux) &&
         ((rgb_clock_pinmux >> 24) & 0xf) == 6 &&
         sf2000_mmio_get32(0x18808084, &vou_ctrl) &&
