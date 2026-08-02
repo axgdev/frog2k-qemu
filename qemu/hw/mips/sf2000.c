@@ -149,6 +149,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_AUDIO_PLL_32K   0x0c000120u
 #define SF2000_AUDIO_DMA_CFG_MASK 0x0f330000u
 #define SF2000_AUDIO_DMA_MONO_S16 0x09100000u
+#define SF2000_AUDIO_DMA_STEREO_S16 0x0a100000u
 #define SF2000_SND_DAC_BASE    0x1880b000ULL
 #define SF2000_SND_DAC_SIZE    0x00000100ULL
 #define SF2000_USB0_BASE       0x18844000ULL
@@ -388,7 +389,7 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
         .audio_volume = 75,
         .audio_gain = 8,
         .audio_sample_rate_hz = 32000,
-        .audio_channels = 1,
+        .audio_channels = 2,
         .audio_runtime_channels = 2,
         .audio_period_frames = 1024,
         .audio_periods = 8,
@@ -508,24 +509,34 @@ static void sf2000_audio_stc_tick_write(unsigned id, uint32_t value)
         qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 }
 
-static bool sf2000_audio_dma_configured(void)
+static unsigned sf2000_audio_dma_channels(void)
 {
     uint32_t dma = 0;
+
+    sf2000_mmio_get32(SF2000_AUDIO_I2S_BASE + 0x34, &dma);
+
+    if ((dma & SF2000_AUDIO_DMA_CFG_MASK) == SF2000_AUDIO_DMA_STEREO_S16) {
+        return 2;
+    }
+    if ((dma & SF2000_AUDIO_DMA_CFG_MASK) == SF2000_AUDIO_DMA_MONO_S16) {
+        return 1;
+    }
+    return 0;
+}
+
+static bool sf2000_audio_dma_configured(void)
+{
     uint32_t pll = 0;
     uint32_t gate = 0;
 
-    sf2000_mmio_get32(SF2000_AUDIO_I2S_BASE + 0x34, &dma);
     sf2000_mmio_get32(SF2000_AUDIO_SYS_PLL, &pll);
     sf2000_mmio_get32(SF2000_AUDIO_SYS_GATE, &gate);
 
     /*
-     * HC15xx SND0 mono S16_LE contract recovered from libauddrv:
-     * mono channel code 0, S16 format code 1, mono packing, DMA enable,
-     * 12.288 MHz I2S clock and its gate.  Bit 25 is the stereo-channel
-     * selector and must be clear for the SF2000's one-channel stream.
+     * HC15xx SND0 S16_LE contracts recovered from libauddrv.  SF2000 uses
+     * mono packing; GB300's stock route uses two S16 slots with bit 25 set.
      */
-    return (dma & SF2000_AUDIO_DMA_CFG_MASK) ==
-               SF2000_AUDIO_DMA_MONO_S16 &&
+    return sf2000_audio_dma_channels() != 0 &&
            (sf2000_audio_snd_ctl04 & (BIT(0) | BIT(8) | BIT(16))) ==
                (BIT(0) | BIT(8) | BIT(16)) &&
            pll == SF2000_AUDIO_PLL_32K && (gate & BIT(14)) &&
@@ -1003,6 +1014,8 @@ static void sf2000_audio_callback(void *opaque, int free)
     int16_t sample_buf[256 * 2];
     unsigned channels = sf2000_board_profile_spec()->audio_channels ?
                         sf2000_board_profile_spec()->audio_channels : 1;
+    unsigned dma_channels = sf2000_audio_dma_channels();
+    unsigned buffer_channels = MAX(channels, dma_channels ? dma_channels : 1);
 
     (void)opaque;
 
@@ -1020,7 +1033,7 @@ static void sf2000_audio_callback(void *opaque, int free)
 
     while (free > 0) {
         size_t frames = MIN((size_t)free / (sizeof(int16_t) * channels),
-                            ARRAY_SIZE(sample_buf) / channels);
+                            ARRAY_SIZE(sample_buf) / buffer_channels);
         size_t bytes;
         bool dma_underrun = false;
 
@@ -1034,12 +1047,14 @@ static void sf2000_audio_callback(void *opaque, int free)
             (sf2000_audio_snd_ctl0c & 1) &&
             (sf2000_audio_snd_ctl50 & BIT(29))) {
             size_t available = sf2000_audio_dma_queued;
-            size_t guest_bytes = MIN(frames * sizeof(int16_t), available);
+            size_t guest_bytes = MIN(frames * sizeof(int16_t) * dma_channels,
+                                     available);
             size_t first = MIN(guest_bytes,
                                sf2000_audio_dma_bytes -
                                sf2000_audio_dma_consumer);
 
-            dma_underrun = guest_bytes < frames * sizeof(int16_t);
+            dma_underrun = guest_bytes <
+                            frames * sizeof(int16_t) * dma_channels;
             cpu_physical_memory_read(sf2000_audio_dma_base +
                                      sf2000_audio_dma_consumer,
                                      sample_buf, first);
@@ -1049,14 +1064,19 @@ static void sf2000_audio_callback(void *opaque, int free)
                                          guest_bytes - first);
             }
             memset((uint8_t *)sample_buf + guest_bytes, 0,
-                   frames * sizeof(int16_t) - guest_bytes);
-            if (channels > 1) {
+                   frames * sizeof(int16_t) * dma_channels - guest_bytes);
+            if (dma_channels == 1 && channels == 2) {
                 for (size_t i = frames; i-- > 0;) {
                     int16_t sample = sample_buf[i];
 
                     for (unsigned ch = 0; ch < channels; ch++) {
                         sample_buf[i * channels + ch] = sample;
                     }
+                }
+            } else if (dma_channels == 2 && channels == 1) {
+                for (size_t i = 0; i < frames; i++) {
+                    sample_buf[i] = (int16_t)(((int)sample_buf[i * 2] +
+                                               (int)sample_buf[i * 2 + 1]) / 2);
                 }
             }
         } else if (sf2000_audio_dma_bytes) {
@@ -1084,7 +1104,8 @@ static void sf2000_audio_callback(void *opaque, int free)
             (sf2000_audio_snd_ctl0c & 1) &&
             (sf2000_audio_snd_ctl50 & BIT(29))) {
             size_t available = sf2000_audio_dma_queued;
-            size_t guest_written = MIN((size_t)bytes / channels, available);
+            size_t guest_written = MIN((size_t)bytes * dma_channels / channels,
+                                       available);
             uint32_t old_consumer = sf2000_audio_dma_consumer;
             uint32_t period_frames = 0;
             uint32_t period_bytes;
@@ -1106,8 +1127,8 @@ static void sf2000_audio_callback(void *opaque, int free)
             sf2000_mmio_get32(SF2000_AUDIO_I2S_BASE + 0x5c,
                               &period_frames);
             period_frames &= 0xffffu;
-            /* SND0 +0x5c is in PCM frames; mono S16 is two bytes/frame. */
-            period_bytes = period_frames * sizeof(int16_t);
+            /* SND0 +0x5c is in PCM frames; account for both transport slots. */
+            period_bytes = period_frames * sizeof(int16_t) * dma_channels;
             if (period_bytes && guest_written &&
                 old_consumer / period_bytes !=
                     sf2000_audio_dma_consumer / period_bytes) {
