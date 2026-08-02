@@ -7214,6 +7214,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     uint8_t *linebuf;
     uint8_t *linebuf_alloc = NULL;
     bool have_palette = false;
+    bool csc_coefficients_valid = true;
     uint32_t d0, d1, d2, d3, d4, d5, d6, d7, d8, d9;
     uint32_t mode, clut_update, sx, ex, sy, ey, src_w, src_h, pitch;
     uint32_t sample_w, sample_h;
@@ -7401,6 +7402,34 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
 
     scale_x = sample_w != width;
     scale_y = sample_h != height;
+
+    /* Native RGB565 descriptors set D0[12] to enable the HC15 CSC path.
+     * Physical GMA requires the twelve signed BT.709 coefficients in the
+     * descriptor tail; accepting an all-zero tail makes QEMU show a frame
+     * that the hardware reduces to its VPO background. */
+    if (d0 & (1u << 12)) {
+        uint8_t csc_table[12 * sizeof(uint32_t)];
+        unsigned coefficient;
+
+        if (address_space_read(&address_space_memory, dmba_addr + 0x240,
+                               MEMTXATTRS_UNSPECIFIED, csc_table,
+                               sizeof(csc_table)) != MEMTX_OK) {
+            csc_coefficients_valid = false;
+        } else {
+            for (coefficient = 0; coefficient < 12; coefficient++) {
+                if (ldl_le_p(csc_table + coefficient * sizeof(uint32_t))) {
+                    break;
+                }
+            }
+            csc_coefficients_valid = coefficient == 12 ? false : true;
+        }
+        if (!csc_coefficients_valid) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: gma-present missing CSC coefficients dmba=0x%08x\n",
+                          dmba_addr);
+            return d6;
+        }
+    }
 
     /*
      * HC15 scaled GMA blocks carry 32 two-word filter phases at descriptor
