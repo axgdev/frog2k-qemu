@@ -7281,6 +7281,18 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
+    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+        sf2000_mmio_get32(0x188004a8, &rgb_pinmux) &&
+        (rgb_pinmux & 0xffu) != 0) {
+        sf2000_vou_present_unlatched_background(s);
+        if (!s->panel_vsync_unconnected_logged) {
+            s->panel_vsync_unconnected_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: panel TE pad is not GPIO input pinmux=0x%08x\n",
+                          rgb_pinmux);
+        }
+        return 0;
+    }
     /*
      * The HC15 panel helper connects the completed VOU raster to PRGB with
      * two writes immediately before changing the shared pad mux:
