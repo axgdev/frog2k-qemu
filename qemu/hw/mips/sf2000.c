@@ -1428,6 +1428,7 @@ struct SF2000LCDState {
     bool panel_gram_prime_missing_logged;
     bool panel_rgb_handoff_synchronized;
     bool panel_rgb_handoff_order_logged;
+    bool panel_pad_mux_invalid_logged;
 };
 
 static SF2000LCDState *sf2000_lcd;
@@ -7225,6 +7226,12 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
     unsigned phase = 32;
     int y;
     uint32_t rgb_pinmux = 0;
+    uint32_t rgb_pad_l04 = 0;
+    uint32_t rgb_pad_l00 = 0;
+    uint32_t rgb_pad_t08 = 0;
+    uint32_t rgb_pad_t0c = 0;
+    uint32_t rgb_pad_t00 = 0;
+    uint32_t rgb_pad_t04 = 0;
     uint32_t rgb_clock_pinmux = 0;
     uint32_t rgb_clock_gate0 = 0;
     uint32_t rgb_clock_gate = 0;
@@ -7290,6 +7297,30 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
             qemu_log_mask(LOG_GUEST_ERROR,
                           "sf2000: panel TE pad is not GPIO input pinmux=0x%08x\n",
                           rgb_pinmux);
+        }
+        return 0;
+    }
+    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+        sf2000_mmio_get32(0x188004a4, &rgb_pad_l04) &&
+        sf2000_mmio_get32(0x188004a0, &rgb_pad_l00) &&
+        sf2000_mmio_get32(0x18800508, &rgb_pad_t08) &&
+        sf2000_mmio_get32(0x1880050c, &rgb_pad_t0c) &&
+        sf2000_mmio_get32(0x18800500, &rgb_pad_t00) &&
+        sf2000_mmio_get32(0x18800504, &rgb_pad_t04) &&
+        (rgb_pad_l04 != 0xb6060606u ||
+         (rgb_pad_l00 & 0xffff0000u) != 0x06060000u ||
+         (rgb_pad_t08 & 0xffffff00u) != 0x06060600u ||
+         (rgb_pad_t0c & 0x00ffffffu) != 0x00060606u ||
+         (rgb_pad_t00 & 0xffff0000u) != 0x06060000u ||
+         (rgb_pad_t04 & 0x00ffffffu) != 0x00060606u)) {
+        sf2000_vou_present_unlatched_background(s);
+        if (!s->panel_pad_mux_invalid_logged) {
+            s->panel_pad_mux_invalid_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: RGB pad mux incomplete L04=%08x L00=%08x "
+                          "T08=%08x T0c=%08x T00=%08x T04=%08x\n",
+                          rgb_pad_l04, rgb_pad_l00, rgb_pad_t08, rgb_pad_t0c,
+                          rgb_pad_t00, rgb_pad_t04);
         }
         return 0;
     }
