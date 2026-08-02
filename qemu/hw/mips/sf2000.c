@@ -1424,6 +1424,8 @@ struct SF2000LCDState {
     bool panel_ramwr_handoff_logged;
     bool panel_ramctrl_handoff_logged;
     bool panel_ramctrl_explicit;
+    bool panel_gram_prime_complete;
+    bool panel_gram_prime_missing_logged;
     bool panel_rgb_handoff_synchronized;
     bool panel_rgb_handoff_order_logged;
 };
@@ -5882,8 +5884,16 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
             if ((s->panel_ramctrl[0] & 0x13) == 0x11) {
                 s->panel_rgb_handoff_synchronized =
                     s->vou_setup_seen && s->vou_latch_stage >= 10 &&
-                    sf2000_active_gma[0] != 0;
+                    sf2000_active_gma[0] != 0 &&
+                    s->panel_gram_prime_complete;
+                if (!s->panel_gram_prime_complete &&
+                    !s->panel_gram_prime_missing_logged) {
+                    s->panel_gram_prime_missing_logged = true;
+                    qemu_log_mask(LOG_GUEST_ERROR,
+                                  "sf2000: panel entered RGB mode without a complete MCU GRAM prime\n");
+                }
                 if (!s->panel_rgb_handoff_synchronized &&
+                    s->panel_gram_prime_complete &&
                     !s->panel_rgb_handoff_order_logged) {
                     s->panel_rgb_handoff_order_logged = true;
                     qemu_log_mask(LOG_GUEST_ERROR,
@@ -5924,6 +5934,14 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
             s->panel_pixels[s->panel_y * sf2000_panel_raw_width(s) + s->panel_x] =
                 sf2000_rgb565_to_surface(value);
             s->panel_pixel_count++;
+            if (!s->panel_gram_prime_complete &&
+                s->panel_pixel_count >=
+                    sf2000_panel_raw_width(s) * sf2000_panel_raw_height(s)) {
+                s->panel_gram_prime_complete = true;
+                qemu_log_mask(LOG_UNIMP,
+                              "sf2000: panel MCU GRAM prime complete pixels=%u\n",
+                              s->panel_pixel_count);
+            }
             if (s->panel_pixel_count <= 16 ||
                 (s->panel_pixel_count % 4096) == 0) {
                 qemu_log_mask(LOG_UNIMP,
@@ -5968,6 +5986,9 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_ramctrl_count = 0;
 		s->panel_ramctrl_explicit = false;
 		s->panel_ramctrl_handoff_logged = false;
+		s->panel_pixel_count = 0;
+		s->panel_gram_prime_complete = false;
+		s->panel_gram_prime_missing_logged = false;
 		s->panel_rgb_handoff_synchronized = false;
 		s->panel_rgb_handoff_order_logged = false;
 	} else if (s->panel_cmd == 0xb0) {
@@ -5992,7 +6013,7 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		 * transaction—not an inferred RAMCTRL value—as the handoff latch.
 		 */
 		if (s->vou_setup_seen && s->vou_latch_stage >= 10 &&
-		    sf2000_active_gma[0] != 0) {
+		    sf2000_active_gma[0] != 0 && s->panel_gram_prime_complete) {
 			s->panel_rgb_handoff_synchronized = true;
 		}
 		if (trace_command)
@@ -6009,7 +6030,13 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		 * scanout remains independently gated on the completed VOU latch.
 		 * MuFrog instead supplies the RAMWR branch above.
 		 */
-		s->panel_rgb_handoff_synchronized = true;
+		if (!s->panel_ramctrl_explicit || s->panel_gram_prime_complete) {
+			s->panel_rgb_handoff_synchronized = true;
+		} else if (!s->panel_gram_prime_missing_logged) {
+			s->panel_gram_prime_missing_logged = true;
+			qemu_log_mask(LOG_GUEST_ERROR,
+			              "sf2000: DISPON cannot complete explicit RGB handoff without MCU GRAM prime\n");
+		}
 		s->panel_readback_active = false;
     } else if (sf2000_panel_is_readback_cmd(s->panel_cmd)) {
         sf2000_panel_prepare_readback(s);
@@ -6062,6 +6089,9 @@ static void sf2000_panel_gpio_write(hwaddr full_addr, uint32_t value)
             s->panel_ramctrl[1] = 0xf0;
             s->panel_ramctrl_count = 0;
             s->panel_ramctrl_handoff_logged = false;
+            s->panel_pixel_count = 0;
+            s->panel_gram_prime_complete = false;
+            s->panel_gram_prime_missing_logged = false;
             s->panel_rgb_handoff_synchronized = false;
             s->panel_rgb_handoff_order_logged = false;
             qemu_log_mask(LOG_UNIMP,
