@@ -1850,6 +1850,8 @@ static bool sf2000_sdio_callback_pending;
 static bool sf2000_sdio_app_cmd;
 static uint8_t sf2000_sdio_bus_width;
 static uint8_t sf2000_sdio_dma_control;
+static uint8_t sf2000_sdio_cmd_control;
+static bool sf2000_sdio_dma_word_start;
 static bool sf2000_sdio_stall_once_consumed;
 static bool sf2000_sb_timer_irq_masked;
 static BlockBackend *sf2000_sdio_blk;
@@ -1891,6 +1893,8 @@ static void sf2000_sdio_ip_reset(void)
     sf2000_sdio_irq_pending = false;
     sf2000_sdio_callback_pending = false;
     sf2000_sdio_dma_control = 0x20;
+    sf2000_sdio_cmd_control = 0;
+    sf2000_sdio_dma_word_start = false;
     info_report("sf2000: SDIO host IP reset");
 }
 static char sf2000_uart_line[2][256];
@@ -5446,17 +5450,20 @@ static void sf2000_sdio_dma_read(uint32_t lba)
 
 static bool sf2000_sdio_dma_read_enabled(void)
 {
-    if ((sf2000_sdio_dma_control & 0x21) == 0x21) {
+    if ((sf2000_sdio_dma_control & 0x21) == 0x21 &&
+        (sf2000_sdio_dma_word_start || (sf2000_sdio_cmd_control & 0x80))) {
         return true;
     }
 
-    /* HC15xx can finish the card-side command with bit 5 clear, but it does
-     * not transfer data to memory.  Modeling that split is important: a
-     * coherent QEMU RAM buffer otherwise hides stale-cache/stale-buffer bugs
-     * which produce corrupt FAT directory entries on physical hardware. */
+    /* Stock firmware uses the byte-oriented 0x20 -> 0x21 DMA sequence with
+     * command-control bit 7.  The source Linux host uses a 32-bit DMA start
+     * in its alternate host mode.  Mixing the byte start with cmdctl 0x19
+     * completes the card command on physical HC15xx without updating RAM. */
     qemu_log_mask(LOG_GUEST_ERROR,
-                  "sf2000: SDIO data command without DMA enable ctrl=0x%02x\n",
-                  sf2000_sdio_dma_control);
+                  "sf2000: SDIO data command missing DMA mode "
+                  "ctrl=0x%02x cmdctl=0x%02x word=%u\n",
+                  sf2000_sdio_dma_control, sf2000_sdio_cmd_control,
+                  sf2000_sdio_dma_word_start);
     sf2000_sdio_xfer_done = true;
     sf2000_sdio_xfer_busy = false;
     sf2000_sdio_write_active = false;
@@ -7227,6 +7234,7 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     } else if (full_addr == 0x1884c030) {
         sf2000_sdio_dma_control = value & 0x21;
         if (value & 0x40) {
+            sf2000_sdio_dma_word_start = false;
             sf2000_sdio_xfer_done = false;
             sf2000_sdio_xfer_busy = false;
             sf2000_sdio_write_active = false;
@@ -7235,11 +7243,13 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             sf2000_sdio_pio_state |= 0x01;
             sf2000_sdio_pio_state &= ~0x01;
         } else if (value & 1) {
+            sf2000_sdio_dma_word_start = size == 4;
             sf2000_sdio_xfer_done = false;
             sf2000_sdio_xfer_busy = true;
             sf2000_sdio_write_active = true;
             sf2000_sdio_pio_state = 0x04;
         } else if (value & 0x20) {
+            sf2000_sdio_dma_word_start = false;
             sf2000_sdio_xfer_done = false;
             sf2000_sdio_xfer_busy = false;
             sf2000_sdio_write_active = false;
@@ -7256,8 +7266,11 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_sdio_pio_state &= ~0x04;
         sf2000_sdio_pio_state |= 0x01;
         sf2000_sdio_pio_state &= ~0x01;
-    } else if (full_addr == 0x1884c000 && (value & 1)) {
-        sf2000_sdio_complete_cmd();
+    } else if (full_addr == 0x1884c000) {
+        sf2000_sdio_cmd_control = value & 0xff;
+        if (value & 1) {
+            sf2000_sdio_complete_cmd();
+        }
     }
 
     if ((full_addr & ~3u) == SF2000_AUDIO_I2S_FADE90) {
@@ -8554,6 +8567,8 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_app_cmd = false;
     sf2000_sdio_bus_width = 1;
     sf2000_sdio_dma_control = 0x20;
+    sf2000_sdio_cmd_control = 0;
+    sf2000_sdio_dma_word_start = false;
     sf2000_sdio_stall_once_consumed = false;
     sf2000_last_unifrog_trace_count = 0;
     sf2000_last_unifrog_trace_valid = false;
