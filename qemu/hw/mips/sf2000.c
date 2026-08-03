@@ -7422,12 +7422,13 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: panel TE/RAMWR rearm complete\n");
         }
-        if (!s->panel_te_rearm_seen) {
+        if (s->panel_te_rearm_count < SF2000_PANEL_TE_CONDITIONING_EDGES) {
             sf2000_vou_present_unlatched_background(s);
             if (!s->panel_te_rearm_missing_logged) {
                 s->panel_te_rearm_missing_logged = true;
                 qemu_log_mask(LOG_UNIMP,
-                              "sf2000: RGB scanout held until panel TE/RAMWR rearm\n");
+                              "sf2000: RGB scanout held until panel TE/RAMWR conditioning count=%u\n",
+                              s->panel_te_rearm_count);
             }
             return 0;
         }
