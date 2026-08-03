@@ -86,6 +86,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_LCD_MMIO_SIZE   0x00001000ULL
 #define SF2000_LCD_WIDTH       320
 #define SF2000_LCD_HEIGHT      240
+#define SF2000_PANEL_TE_CONDITIONING_EDGES 4u
 #define SF2000_CHIP_ID_VALUE   0x1512a501
 #define SF2000_HC15XX_CHIP_ID  0x1512
 #define SF2000_IRC_BASE        0x18818100ULL
@@ -1433,6 +1434,8 @@ struct SF2000LCDState {
     bool panel_te_rearm_pending;
     bool panel_te_rearm_seen;
     bool panel_te_rearm_missing_logged;
+    unsigned panel_te_rearm_count;
+    bool panel_te_rearm_repeat_logged;
 };
 
 static SF2000LCDState *sf2000_lcd;
@@ -5933,6 +5936,8 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
                 s->panel_te_rearm_pending = false;
                 s->panel_te_rearm_seen = false;
                 s->panel_te_rearm_missing_logged = false;
+                s->panel_te_rearm_count = 0;
+                s->panel_te_rearm_repeat_logged = false;
                 s->panel_rgb_handoff_synchronized =
                     s->vou_setup_seen && s->vou_latch_stage >= 10 &&
                     sf2000_active_gma[0] != 0 &&
@@ -6043,9 +6048,11 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_rgb_handoff_synchronized = false;
 		s->panel_rgb_handoff_order_logged = false;
 		s->panel_rgb_pad_seen = false;
-		s->panel_te_rearm_pending = false;
-		s->panel_te_rearm_seen = false;
-		s->panel_te_rearm_missing_logged = false;
+        s->panel_te_rearm_pending = false;
+        s->panel_te_rearm_seen = false;
+        s->panel_te_rearm_missing_logged = false;
+        s->panel_te_rearm_count = 0;
+        s->panel_te_rearm_repeat_logged = false;
 	} else if (s->panel_cmd == 0xb0) {
 		s->panel_ramctrl_count = 0;
 	}
@@ -6054,10 +6061,19 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
         s->panel_rgb_handoff_synchronized &&
         s->panel_rgb_pad_seen &&
         !sf2000_panel_rgb_pad_is_active()) {
-        /* RAMWR is a command-only ownership rearm at every TE edge. */
+        /* RAMWR is a command-only ownership rearm during TE conditioning. */
+        s->panel_te_rearm_count++;
+        if (s->panel_te_rearm_count > SF2000_PANEL_TE_CONDITIONING_EDGES &&
+            !s->panel_te_rearm_repeat_logged) {
+            s->panel_te_rearm_repeat_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: panel TE/RAMWR rearm continued after "
+                          "conditioning count=%u\n",
+                          s->panel_te_rearm_count);
+        }
         s->panel_te_rearm_pending = true;
     }
-	/* RAMWR is issued on every TE edge; retain useful early/periodic traces
+	/* RAMWR is issued during TE conditioning; retain useful early/periodic traces
 	 * without filling the QEMU log at the panel refresh rate. */
 	trace_command = s->panel_cmd_count <= 64 ||
 		(s->panel_cmd == 0x2c && (s->panel_cmd_count % 60u) == 0);
@@ -7379,6 +7395,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         sf2000_mmio_get32(0x1880050c, &rgb_pad_t0c) &&
         sf2000_mmio_get32(0x18800500, &rgb_pad_t00) &&
         sf2000_mmio_get32(0x18800504, &rgb_pad_t04) &&
+        !s->panel_te_rearm_pending &&
         (rgb_pad_l04 != 0xb6060606u ||
          (rgb_pad_l00 & 0xffff0000u) != 0x06060000u ||
          (rgb_pad_t08 & 0xffffff00u) != 0x06060600u ||
