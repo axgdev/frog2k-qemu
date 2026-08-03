@@ -237,6 +237,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_GPIO_L15        BIT(15)
 #define SF2000_GPIO_L_ISR      0x1880005cULL
 #define SF2000_GPIO_L08        BIT(8)
+#define SF2000_PANEL_TE_PULSE_NS 200000
 #define SF2000_GPIO_R_IN       0x188000f0ULL
 #define SF2000_GPIO_R_OUT      0x188000f4ULL
 #define SF2000_GPIO_R_DIR      0x188000f8ULL
@@ -6491,22 +6492,25 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         if (strcmp(sf2000_board_profile_name(), "gb300") == 0)
             value |= BIT(27);
         /*
-         * L08 is the panel's TE input.  Linux's userspace screen polls this
-         * pin after taking ownership from the kernel GPIO IRQ, so keep the
-         * electrical level moving even when the interrupt enable bit is
-         * intentionally masked.  The aggregate IRQ remains gated by
-         * sf2000_gpio_l_vsync_enabled(); this only models the observable pad.
+         * L08 is the panel's TE input.  It is a short vertical-blanking pulse,
+         * not a 50%-duty frame clock.  Keeping it high for half a frame hid
+         * guests which sampled the level only once per millisecond instead of
+         * using the HC15 GPIO edge latch like the vendor driver.  Linux still
+         * polls the observable pad during its bounded handoff, but does so in
+         * a tight loop; NuttX uses the edge latch.
          */
         if (sf2000_lcd) {
             uint32_t panel_te_hz = sf2000_lcd->panel_te_hz;
-            int64_t half_period;
+            int64_t period;
+            int64_t phase;
 
             if (!panel_te_hz) {
                 panel_te_hz = 60;
             }
-            half_period = NANOSECONDS_PER_SECOND /
-                ((int64_t)panel_te_hz * 2);
-            if ((qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / half_period) & 1) {
+            period = NANOSECONDS_PER_SECOND / panel_te_hz;
+            phase = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) % period;
+            if (phase < MIN((int64_t)SF2000_PANEL_TE_PULSE_NS,
+                            period / 4)) {
                 value |= SF2000_GPIO_L08;
             } else {
                 value &= ~SF2000_GPIO_L08;
