@@ -1436,6 +1436,8 @@ struct SF2000LCDState {
     bool panel_te_rearm_missing_logged;
     unsigned panel_te_rearm_count;
     bool panel_te_rearm_repeat_logged;
+    uint8_t vou_timing_sequence;
+    bool vou_timing_order_logged;
 };
 
 static SF2000LCDState *sf2000_lcd;
@@ -1589,9 +1591,52 @@ static void sf2000_panel_store_raw(SF2000LCDState *s,
 static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
 {
     SF2000LCDState *s = sf2000_lcd;
+    static const struct {
+        hwaddr addr;
+        uint32_t value;
+    } final_timing[] = {
+        { 0x1880800c, 0x01300378 },
+        { 0x18808010, 0x00040378 },
+        { 0x18808040, 0x00040378 },
+        { 0x18808014, 0x028e000a },
+        { 0x18808044, 0x028e000a },
+        { 0x18808018, 0x00240130 },
+        { 0x18808048, 0x00240130 },
+        { 0x1880801c, 0x07ff07ff },
+        { 0x1880804c, 0x07ff07ff },
+        { 0x18808020, 0x00001fff },
+        { 0x18808050, 0x00001fff },
+        { 0x18808024, 0x011e002e },
+        { 0x18808054, 0x011e002e },
+        { 0x18808028, 0x07ff07ff },
+        { 0x18808058, 0x07ff07ff },
+        { 0x1880802c, 0x013007ff },
+        { 0x1880805c, 0x013007ff },
+    };
+    unsigned timing_index;
 
     if (!s) {
         return;
+    }
+
+    /* The HC15 timing block is double-buffered.  The final 0x05c write is
+     * not interchangeable with the earlier bank-1 write: the hardware arms
+     * both banks only after the complete bank-0/bank-1 sequence.  Modeling
+     * this ordering prevents QEMU from accepting a guest that merely has
+     * plausible register readback but produces a fixed wrapped raster on the
+     * physical panel. */
+    if (s->vou_timing_sequence == 0 && addr == final_timing[0].addr &&
+        value == final_timing[0].value) {
+        s->vou_timing_sequence = 1;
+    } else if (s->vou_timing_sequence != 0 &&
+               s->vou_timing_sequence < ARRAY_SIZE(final_timing)) {
+        timing_index = s->vou_timing_sequence;
+        if (addr == final_timing[timing_index].addr &&
+            value == final_timing[timing_index].value) {
+            s->vou_timing_sequence++;
+        } else {
+            s->vou_timing_sequence = 0;
+        }
     }
     if (addr == 0x18808190 && value == 0x00800100) {
         s->vou_setup_seen = true;
@@ -1607,6 +1652,8 @@ static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
     case 0:
         if (addr == 0x18808000 && value == 0x00000011) {
             s->vou_latch_stage = 1;
+            s->vou_timing_sequence = 0;
+            s->vou_timing_order_logged = false;
         }
         break;
     case 1:
@@ -1652,6 +1699,17 @@ static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
     case 9:
         if (addr == 0x188081ec && value == 0x00050000) {
             uint32_t dmba = 0;
+
+            if (s->vou_timing_sequence != ARRAY_SIZE(final_timing)) {
+                if (!s->vou_timing_order_logged) {
+                    s->vou_timing_order_logged = true;
+                    qemu_log_mask(LOG_GUEST_ERROR,
+                                  "sf2000: VOU RGB latch before ordered final timing sequence step=%u/%zu\n",
+                                  s->vou_timing_sequence,
+                                  ARRAY_SIZE(final_timing));
+                }
+                break;
+            }
 
             s->vou_latch_stage = 10;
             info_report("sf2000: VOU RGB compositor latch complete");
