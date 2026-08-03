@@ -55,8 +55,9 @@ until a board selector is needed. The next modelable board differences are:
 - Panel geometry and transform: preserve the common 320x240 framebuffer path,
   but make MADCTL and set-address-window behavior visible enough to catch
   rotated or mirrored init mistakes. QEMU now has an explicit `board-profile`
-  selector, and GB300 display tests use `board-profile=gb300` so the rotated
-  240x320 geometry comes from board data instead of a hidden firmware quirk.
+  selector. The GB300 controller has native 240x320 GRAM, but MADCTL.MV makes
+  its live address and RGB stream logical 320x240. The model keeps those two
+  geometries separate and rejects a native-sized live window.
   The same profile record now carries the current panel ID, audio and USB
   route labels, plus the panel TE rate, and the machine exposes them as
   read-only `panel-id`, `panel-te-hz`, `audio-route`, `usb0-route`, and

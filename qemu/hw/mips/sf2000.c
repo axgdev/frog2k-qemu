@@ -359,8 +359,9 @@ static const SF2000BoardProfileSpec sf2000_board_profiles[] = {
     },
     {
         .name = "gb300",
-        .lcd_width = 240,
-        .lcd_height = 320,
+        /* MADCTL.MV exposes the physical 240x320 GRAM as a 320x240 raster. */
+        .lcd_width = SF2000_LCD_WIDTH,
+        .lcd_height = SF2000_LCD_HEIGHT,
         .panel_te_hz = 60,
         .panel_id = 0x00009306,
         .panel_probe_sig1 = 0x00000000,
@@ -1470,6 +1471,7 @@ struct SF2000LCDState {
     bool panel_ramctrl_explicit;
     bool panel_gram_prime_complete;
     bool panel_gram_prime_missing_logged;
+    bool panel_window_invalid_logged;
     bool panel_rgb_handoff_synchronized;
     bool panel_rgb_handoff_order_logged;
     bool panel_h3_ramwr_seen;
@@ -1498,24 +1500,38 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
 
 static unsigned sf2000_panel_surface_width(const SF2000LCDState *s)
 {
-    return s->width ? s->width :
-        (sf2000_panel_is_gb300() ? 240u : SF2000_LCD_WIDTH);
+    return s->width ? s->width : SF2000_LCD_WIDTH;
 }
 
 static unsigned sf2000_panel_surface_height(const SF2000LCDState *s)
 {
-    return s->height ? s->height :
-        (sf2000_panel_is_gb300() ? 320u : SF2000_LCD_HEIGHT);
+    return s->height ? s->height : SF2000_LCD_HEIGHT;
 }
 
 static unsigned sf2000_panel_raw_width(const SF2000LCDState *s)
 {
-    return sf2000_panel_is_gb300() ? 240u : sf2000_panel_surface_width(s);
+    (void)s;
+    /* Both ST7789-family panels have portrait GRAM. MADCTL.MV rotates the
+     * address space into the 320x240 landscape stream used by HC15 VOU. */
+    return 240u;
 }
 
 static unsigned sf2000_panel_raw_height(const SF2000LCDState *s)
 {
-    return sf2000_panel_is_gb300() ? 320u : sf2000_panel_surface_height(s);
+    (void)s;
+    return 320u;
+}
+
+static unsigned sf2000_panel_address_width(const SF2000LCDState *s)
+{
+    return s && (s->panel_madctl & BIT(5)) ?
+        sf2000_panel_raw_height(s) : sf2000_panel_raw_width(s);
+}
+
+static unsigned sf2000_panel_address_height(const SF2000LCDState *s)
+{
+    return s && (s->panel_madctl & BIT(5)) ?
+        sf2000_panel_raw_width(s) : sf2000_panel_raw_height(s);
 }
 
 static bool sf2000_panel_rgb_pad_is_active(void)
@@ -6240,9 +6256,31 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
         }
         break;
     case 0x2c:
-        if (s->panel_x < sf2000_panel_raw_width(s) &&
-            s->panel_y < sf2000_panel_raw_height(s)) {
-            s->panel_pixels[s->panel_y * sf2000_panel_raw_width(s) + s->panel_x] =
+    {
+        unsigned raw_x = s->panel_x;
+        unsigned raw_y = s->panel_y;
+
+        if (s->panel_data_count == 1 &&
+            (s->panel_x0 != 0 || s->panel_y0 != 0 ||
+             s->panel_x1 + 1u != sf2000_panel_address_width(s) ||
+             s->panel_y1 + 1u != sf2000_panel_address_height(s)) &&
+            !s->panel_window_invalid_logged) {
+            s->panel_window_invalid_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: invalid panel stream window madctl=0x%02x "
+                          "x=%u..%u y=%u..%u expected=%ux%u\n",
+                          s->panel_madctl, s->panel_x0, s->panel_x1,
+                          s->panel_y0, s->panel_y1,
+                          sf2000_panel_address_width(s),
+                          sf2000_panel_address_height(s));
+        }
+        if (s->panel_madctl & BIT(5)) {
+            raw_x = s->panel_y;
+            raw_y = s->panel_x;
+        }
+        if (raw_x < sf2000_panel_raw_width(s) &&
+            raw_y < sf2000_panel_raw_height(s)) {
+            s->panel_pixels[raw_y * sf2000_panel_raw_width(s) + raw_x] =
                 sf2000_rgb565_to_surface(value);
             s->panel_pixel_count++;
             if (!s->panel_gram_prime_complete &&
@@ -6260,7 +6298,7 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
                               s->panel_pixel_count, s->panel_x, s->panel_y,
                               value);
             }
-            sf2000_panel_update_rect(s, s->panel_x, s->panel_y);
+            sf2000_panel_update_rect(s, raw_x, raw_y);
         }
         if (s->panel_x >= s->panel_x1) {
             s->panel_x = s->panel_x0;
@@ -6272,6 +6310,7 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
         }
         s->panel_readback_active = false;
         break;
+    }
     default:
         break;
     }
@@ -6300,6 +6339,7 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_pixel_count = 0;
 		s->panel_gram_prime_complete = false;
 		s->panel_gram_prime_missing_logged = false;
+		s->panel_window_invalid_logged = false;
 		s->panel_rgb_handoff_synchronized = false;
 		s->panel_rgb_handoff_order_logged = false;
 		s->panel_h3_ramwr_seen = false;
