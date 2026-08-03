@@ -1429,8 +1429,9 @@ struct SF2000LCDState {
     bool panel_gram_prime_missing_logged;
     bool panel_rgb_handoff_synchronized;
     bool panel_rgb_handoff_order_logged;
-    bool panel_rgb_handoff_reset_seen;
-    bool panel_rgb_handoff_reset_missing_logged;
+    bool panel_h3_ramwr_seen;
+    bool panel_h3_dispon_seen;
+    bool panel_h3_handoff_logged;
     bool panel_pad_mux_invalid_logged;
     bool panel_rgb_pad_seen;
     bool panel_te_rearm_pending;
@@ -1504,10 +1505,30 @@ static bool sf2000_panel_rgb_pad_is_active(void)
 
 static bool sf2000_panel_rgb_handoff_active(const SF2000LCDState *s)
 {
-    /* Linux/vendor H3 hands the ST7789 to the RGB raster after a short
-     * hardware reset; it does not write RAMCTRL at that ownership edge. */
+    /* Linux/vendor H3 hands the ST7789 to the RGB raster without a
+     * post-prime reset or RAMCTRL write.  The synchronized flag is set only
+     * by the H3 RAMWR/DISPON sequence, after VOU/GMA have latched. */
     return s && s->panel_rgb_handoff_synchronized &&
-           (s->panel_ramctrl_explicit || s->panel_rgb_handoff_reset_seen);
+           s->panel_gram_prime_complete &&
+           s->vou_latch_stage >= 10;
+}
+
+static void sf2000_panel_try_h3_handoff(SF2000LCDState *s)
+{
+    if (!s || s->panel_rgb_handoff_synchronized ||
+        s->panel_ramctrl_explicit || !s->panel_h3_ramwr_seen ||
+        !s->panel_h3_dispon_seen || !s->panel_gram_prime_complete ||
+        !s->vou_setup_seen || s->vou_latch_stage < 10 ||
+        sf2000_active_gma[0] == 0) {
+        return;
+    }
+
+    s->panel_rgb_handoff_synchronized = true;
+    if (!s->panel_h3_handoff_logged) {
+        s->panel_h3_handoff_logged = true;
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: panel H3 RGB handoff complete\n");
+    }
 }
 
 static void sf2000_panel_te_rearm_observe(SF2000LCDState *s)
@@ -1732,6 +1753,7 @@ static void sf2000_vou_track_latch(hwaddr addr, uint32_t value)
 
             s->vou_latch_stage = 10;
             info_report("sf2000: VOU RGB compositor latch complete");
+            sf2000_panel_try_h3_handoff(s);
             /*
              * HC15 continuously scans the descriptor already latched by GMA.
              * MuFrog legitimately submits its first UI frame before the
@@ -6070,15 +6092,6 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
         }
         break;
     case 0x2c:
-        if (s->vou_latch_stage >= 10 &&
-            sf2000_active_gma[0] != 0 &&
-            s->panel_gram_prime_complete &&
-            !s->panel_rgb_handoff_reset_seen &&
-            !s->panel_rgb_handoff_reset_missing_logged) {
-            s->panel_rgb_handoff_reset_missing_logged = true;
-            qemu_log_mask(LOG_GUEST_ERROR,
-                          "sf2000: RGB handoff missing post-prime panel reset\n");
-        }
         if (s->panel_x < sf2000_panel_raw_width(s) &&
             s->panel_y < sf2000_panel_raw_height(s)) {
             s->panel_pixels[s->panel_y * sf2000_panel_raw_width(s) + s->panel_x] =
@@ -6141,6 +6154,9 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_gram_prime_missing_logged = false;
 		s->panel_rgb_handoff_synchronized = false;
 		s->panel_rgb_handoff_order_logged = false;
+		s->panel_h3_ramwr_seen = false;
+		s->panel_h3_dispon_seen = false;
+		s->panel_h3_handoff_logged = false;
 		s->panel_rgb_pad_seen = false;
         s->panel_te_rearm_pending = false;
         s->panel_te_rearm_seen = false;
@@ -6177,14 +6193,14 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
         s->panel_x = s->panel_x0;
         s->panel_y = s->panel_y0;
 		/*
-		 * The SF2000 ST7789 driver does not write RAMCTRL.  Its L08 TE
-		 * callback reissues CASET/RASET/RAMWR while VOU/GMA keeps running,
-		 * then immediately restores the RGB pads.  Treat that recovered
-		 * transaction—not an inferred RAMCTRL value—as the handoff latch.
+		 * The SF2000 ST7789 driver does not write RAMCTRL.  Its H3 handoff
+		 * arms CASET/RASET/RAMWR after VOU/GMA is live, then enables the
+		 * panel and restores the RGB pads.  Treat that transaction—not an
+		 * inferred RAMCTRL value or a post-prime reset—as the handoff latch.
 		 */
-		if (s->vou_setup_seen && s->vou_latch_stage >= 10 &&
-		    sf2000_active_gma[0] != 0 && s->panel_gram_prime_complete) {
-			s->panel_rgb_handoff_synchronized = true;
+		if (!s->panel_ramctrl_explicit && s->panel_gram_prime_complete) {
+			s->panel_h3_ramwr_seen = true;
+			sf2000_panel_try_h3_handoff(s);
 		}
 		if (trace_command)
 			qemu_log_mask(LOG_UNIMP,
@@ -6200,8 +6216,11 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		 * scanout remains independently gated on the completed VOU latch.
 		 * MuFrog instead supplies the RAMWR branch above.
 		 */
-		if (!s->panel_ramctrl_explicit || s->panel_gram_prime_complete) {
-			s->panel_rgb_handoff_synchronized = true;
+		if (!s->panel_ramctrl_explicit && s->panel_gram_prime_complete) {
+			s->panel_h3_dispon_seen = true;
+			sf2000_panel_try_h3_handoff(s);
+		} else if (s->panel_rgb_handoff_synchronized) {
+			/* An explicit RAMCTRL handoff was already validated above. */
 		} else if (!s->panel_gram_prime_missing_logged) {
 			s->panel_gram_prime_missing_logged = true;
 			qemu_log_mask(LOG_GUEST_ERROR,
@@ -6259,21 +6278,16 @@ static void sf2000_panel_gpio_write(hwaddr full_addr, uint32_t value)
             s->panel_ramctrl[1] = 0xf0;
             s->panel_ramctrl_count = 0;
             s->panel_ramctrl_handoff_logged = false;
-            /* The Linux/vendor H3 handoff resets the controller after the
-             * MCU GRAM prime.  The ST7789 resets command state and RAMCTRL,
-             * but the already-written GRAM remains available to the RGB
-             * raster; clearing the model's prime here would reject the
-             * proven handoff. */
+            /* Preserve the modelled GRAM across a hardware reset.  A normal
+             * H3 ownership handoff does not issue this reset, but retaining
+             * the prime matches the physical panel if a later recovery
+             * reset is requested. */
             s->panel_gram_prime_missing_logged = false;
             s->panel_rgb_handoff_synchronized = false;
             s->panel_rgb_handoff_order_logged = false;
-            s->panel_rgb_handoff_reset_seen =
-                s->panel_gram_prime_complete;
-            if (s->panel_rgb_handoff_reset_seen) {
-                qemu_log_mask(LOG_UNIMP,
-                              "sf2000: panel post-prime reset observed\n");
-            }
-            s->panel_rgb_handoff_reset_missing_logged = false;
+            s->panel_h3_ramwr_seen = false;
+            s->panel_h3_dispon_seen = false;
+            s->panel_h3_handoff_logged = false;
             s->panel_rgb_pad_seen = false;
             s->panel_te_rearm_pending = false;
             s->panel_te_rearm_seen = false;
