@@ -68,6 +68,9 @@ until a board selector is needed. The next modelable board differences are:
 - Input matrix: keep local L23/L24 shift-register scanning separate from the
   GPIO-bitbanged RF bus on L27/L28/L29. GB300-family USB gamepad support should
   be modeled as a separate USB host path, not mixed into the RF receiver.
+  The model also keeps a separate 16-bit GB300 keypad cursor for the
+  L25/L26/L27 shifter; sharing the SF2000 12-bit L23/L24 cursor made GB300
+  board detection pass while ordinary GB300 key presses disappeared.
 - Audio and amplifier routing: UniFrog already uses LCD ID clues for board
   routing. The explicit board profile now carries the route labels and exposes
   them as machine properties, and the stock display smoke now observes the
@@ -229,3 +232,8 @@ The immediate emulator goal is not to make every board boot by special casing
 firmware quirks. It is to make common SoC behavior accurate, expose board
 differences as data, and use stock firmware plus UniFrog probes to converge on
 drivers that can run unchanged across the family.
+
+The `board-profile` property accepts `sf2000`, `gb300`,
+`sf2000-gb300-screen`, and `gb300-sf2000-screen`. The first component selects
+the keypad/audio chassis wiring and the screen suffix replaces only panel ID,
+geometry, readback, and MADCTL behavior.

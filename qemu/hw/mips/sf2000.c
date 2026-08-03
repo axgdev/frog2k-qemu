@@ -436,6 +436,7 @@ static uint32_t sf2000_panel_sample_readback_t(SF2000LCDState *s,
 static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
 {
     const char *name = sf2000_board_profile ? sf2000_board_profile : "sf2000";
+    static SF2000BoardProfileSpec mixed;
     size_t i;
 
     for (i = 0; i < ARRAY_SIZE(sf2000_board_profiles); i++) {
@@ -444,12 +445,53 @@ static const SF2000BoardProfileSpec *sf2000_board_profile_spec(void)
         }
     }
 
+    /* Screen-swap units keep their chassis input/audio wiring and only
+     * replace the panel identity, geometry and timing contract. */
+    if (strcmp(name, "sf2000-gb300-screen") == 0) {
+        mixed = sf2000_board_profiles[0];
+        mixed.name = name;
+        mixed.lcd_width = sf2000_board_profiles[1].lcd_width;
+        mixed.lcd_height = sf2000_board_profiles[1].lcd_height;
+        mixed.panel_te_hz = sf2000_board_profiles[1].panel_te_hz;
+        mixed.panel_id = sf2000_board_profiles[1].panel_id;
+        mixed.panel_probe_sig1 = sf2000_board_profiles[1].panel_probe_sig1;
+        mixed.panel_probe_sig2 = sf2000_board_profiles[1].panel_probe_sig2;
+        return &mixed;
+    }
+    if (strcmp(name, "gb300-sf2000-screen") == 0) {
+        mixed = sf2000_board_profiles[1];
+        mixed.name = name;
+        mixed.lcd_width = sf2000_board_profiles[0].lcd_width;
+        mixed.lcd_height = sf2000_board_profiles[0].lcd_height;
+        mixed.panel_te_hz = sf2000_board_profiles[0].panel_te_hz;
+        mixed.panel_id = sf2000_board_profiles[0].panel_id;
+        mixed.panel_probe_sig1 = sf2000_board_profiles[0].panel_probe_sig1;
+        mixed.panel_probe_sig2 = sf2000_board_profiles[0].panel_probe_sig2;
+        return &mixed;
+    }
+
     return &sf2000_board_profiles[0];
 }
 
 static const char *sf2000_board_profile_name(void)
 {
     return sf2000_board_profile_spec()->name;
+}
+
+static bool sf2000_board_is_gb300(void)
+{
+    const char *name = sf2000_board_profile_name();
+
+    return strcmp(name, "gb300") == 0 ||
+           strcmp(name, "gb300-sf2000-screen") == 0;
+}
+
+static bool sf2000_panel_is_gb300(void)
+{
+    const char *name = sf2000_board_profile_name();
+
+    return strcmp(name, "gb300") == 0 ||
+           strcmp(name, "sf2000-gb300-screen") == 0;
 }
 
 static AudioBackend *sf2000_audio_be;
@@ -565,7 +607,7 @@ static bool sf2000_audio_speaker_enabled(void)
     uint32_t direction = 0;
     uint32_t pinmux = 0;
 
-    if (strcmp(sf2000_board_profile_name(), "gb300") == 0) {
+    if (sf2000_board_is_gb300()) {
         return sf2000_mmio_get32(SF2000_GPIO_L_OUT, &output) &&
                sf2000_mmio_get32(SF2000_GPIO_L_DIR, &direction) &&
                sf2000_mmio_get32(SF2000_PINMUX_L15 & ~3u, &pinmux) &&
@@ -1454,11 +1496,6 @@ static void sf2000_lcd_update(void *opaque);
 static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
                                          bool dump_frame);
 
-static bool sf2000_panel_is_gb300(void)
-{
-    return strcmp(sf2000_board_profile_name(), "gb300") == 0;
-}
-
 static unsigned sf2000_panel_surface_width(const SF2000LCDState *s)
 {
     return s->width ? s->width :
@@ -1915,6 +1952,7 @@ static uint8_t sf2000_irc_ier;
 static uint8_t sf2000_irc_isr;
 static uint32_t sf2000_key_mask;
 static unsigned sf2000_key_shift_index;
+static unsigned sf2000_gb300_key_shift_index;
 static uint8_t sf2000_rf_regs[256];
 static bool sf2000_rf_cs;
 static bool sf2000_rf_clk;
@@ -4977,7 +5015,7 @@ static uint32_t sf2000_gpio_l_sample(uint32_t value)
      * electrically distinct: the direction pattern is the same one used by
      * sf2000-pad.c while the GB300 transaction is in its read phase.
      */
-    if (strcmp(sf2000_board_profile_name(), "gb300") == 0 &&
+    if (sf2000_board_is_gb300() &&
         sf2000_mmio_get32(SF2000_GPIO_L_DIR, &dir) &&
         (dir & BIT(26)) && !(dir & BIT(25)) && !(dir & BIT(27))) {
         static const int8_t gb300_key_for_shift[16] = {
@@ -4985,7 +5023,7 @@ static uint32_t sf2000_gpio_l_sample(uint32_t value)
             7, 8, 9, 10, 11, -1, -1, -1,
         };
         int8_t key = gb300_key_for_shift[
-            sf2000_key_shift_index % ARRAY_SIZE(gb300_key_for_shift)];
+            sf2000_gb300_key_shift_index % ARRAY_SIZE(gb300_key_for_shift)];
 
         value |= BIT(25) | BIT(27);
         if (key >= 0 && (sf2000_key_mask & BIT((unsigned)key)))
@@ -5138,6 +5176,8 @@ static void sf2000_gpio_l_write(uint32_t value)
 {
     bool old_clk = (sf2000_gpio_l_out & BIT(SF2000_KEY_CLK_BIT)) != 0;
     bool new_clk = (value & BIT(SF2000_KEY_CLK_BIT)) != 0;
+    bool old_gb_clk = (sf2000_gpio_l_out & BIT(26)) != 0;
+    bool new_gb_clk = (value & BIT(26)) != 0;
     uint32_t dir = 0;
     bool data_is_output;
 
@@ -5156,6 +5196,17 @@ static void sf2000_gpio_l_write(uint32_t value)
     } else if (!old_clk && new_clk) {
         sf2000_key_shift_index =
             (sf2000_key_shift_index + 1) % SF2000_KEY_COUNT;
+    }
+
+    /* GB300 has an independent 16-bit shifter on L25/L27 with L26 clock.
+     * Loading drives both data pins low; each following rising edge advances
+     * one bit.  Do not reuse the 12-bit SF2000 cursor. */
+    if ((dir & (BIT(25) | BIT(27))) == (BIT(25) | BIT(27)) &&
+        !(value & (BIT(25) | BIT(27)))) {
+        sf2000_gb300_key_shift_index = 0;
+    } else if (!old_gb_clk && new_gb_clk) {
+        sf2000_gb300_key_shift_index =
+            (sf2000_gb300_key_shift_index + 1) % 16;
     }
 
     if (g_getenv("SF2000_TRACE_KEYS")) {
@@ -6585,7 +6636,7 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
                 break;
             }
         }
-        if (strcmp(sf2000_board_profile_name(), "gb300") == 0)
+        if (sf2000_board_is_gb300())
             value |= BIT(27);
         /*
          * L08 is the panel's TE input.  It is a short vertical-blanking pulse,
@@ -8307,7 +8358,9 @@ static void sf2000_machine_board_profile_set(Object *obj, const char *value,
         sf2000_board_profile = g_strdup("sf2000");
         return;
     }
-    if (strcmp(value, "sf2000") != 0 && strcmp(value, "gb300") != 0) {
+    if (strcmp(value, "sf2000") != 0 && strcmp(value, "gb300") != 0 &&
+        strcmp(value, "sf2000-gb300-screen") != 0 &&
+        strcmp(value, "gb300-sf2000-screen") != 0) {
         error_setg(errp, "unsupported SF2000 board profile '%s'", value);
         return;
     }
