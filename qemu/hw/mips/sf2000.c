@@ -1429,9 +1429,14 @@ struct SF2000LCDState {
     bool panel_rgb_handoff_synchronized;
     bool panel_rgb_handoff_order_logged;
     bool panel_pad_mux_invalid_logged;
+    bool panel_rgb_pad_seen;
+    bool panel_te_rearm_pending;
+    bool panel_te_rearm_seen;
+    bool panel_te_rearm_missing_logged;
 };
 
 static SF2000LCDState *sf2000_lcd;
+static uint32_t sf2000_active_gma[2];
 static uint32_t sf2000_rgb565_lut[UINT16_MAX + 1u];
 static bool sf2000_rgb565_lut_ready;
 static uint32_t sf2000_rgb565_to_surface(uint16_t pix);
@@ -1465,6 +1470,49 @@ static unsigned sf2000_panel_raw_width(const SF2000LCDState *s)
 static unsigned sf2000_panel_raw_height(const SF2000LCDState *s)
 {
     return sf2000_panel_is_gb300() ? 320u : sf2000_panel_surface_height(s);
+}
+
+static bool sf2000_panel_rgb_pad_is_active(void)
+{
+    uint32_t l04;
+    uint32_t l00;
+    uint32_t t08;
+    uint32_t t0c;
+    uint32_t t00;
+    uint32_t t04;
+
+    return sf2000_mmio_get32(0x188004a4, &l04) &&
+           sf2000_mmio_get32(0x188004a0, &l00) &&
+           sf2000_mmio_get32(0x18800508, &t08) &&
+           sf2000_mmio_get32(0x1880050c, &t0c) &&
+           sf2000_mmio_get32(0x18800500, &t00) &&
+           sf2000_mmio_get32(0x18800504, &t04) &&
+           l04 == 0xb6060606u &&
+           (l00 & 0xffff0000u) == 0x06060000u &&
+           (t08 & 0xffffff00u) == 0x06060600u &&
+           (t0c & 0x00ffffffu) == 0x00060606u &&
+           (t00 & 0xffff0000u) == 0x06060000u &&
+           (t04 & 0x00ffffffu) == 0x00060606u;
+}
+
+static void sf2000_panel_te_rearm_observe(SF2000LCDState *s)
+{
+    if (!s || !s->panel_ramctrl_explicit ||
+        !s->panel_rgb_handoff_synchronized ||
+        !s->panel_te_rearm_pending || s->panel_te_rearm_seen ||
+        !sf2000_panel_rgb_pad_is_active()) {
+        return;
+    }
+
+    s->panel_te_rearm_pending = false;
+    s->panel_te_rearm_seen = true;
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: panel TE/RAMWR rearm complete\n");
+    /* The panel can become visible without another guest DMBA doorbell. */
+    if (s->vou_latch_stage >= 10 &&
+        (sf2000_active_gma[0] || sf2000_active_gma[1])) {
+        sf2000_lcd_update(s);
+    }
 }
 
 static uint32_t sf2000_panel_color(const SF2000LCDState *s, uint32_t color)
@@ -1731,7 +1779,6 @@ static uint8_t sf2000_rf_response;
 static uint8_t sf2000_rf_response_bit;
 static unsigned sf2000_gma_dump_count;
 static unsigned sf2000_ge_queue_dump_count;
-static uint32_t sf2000_active_gma[2];
 static bool sf2000_gma_mask_armed[2];
 static const char *sf2000_last_pc_landmark;
 static unsigned sf2000_pc_sample_count;
@@ -5883,6 +5930,9 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
                           (s->panel_ramctrl[0] & 3) == 2 ? "VSYNC" : "MCU",
                           s->panel_ramctrl[0], s->panel_ramctrl[1]);
             if ((s->panel_ramctrl[0] & 0x13) == 0x11) {
+                s->panel_te_rearm_pending = false;
+                s->panel_te_rearm_seen = false;
+                s->panel_te_rearm_missing_logged = false;
                 s->panel_rgb_handoff_synchronized =
                     s->vou_setup_seen && s->vou_latch_stage >= 10 &&
                     sf2000_active_gma[0] != 0 &&
@@ -5992,9 +6042,21 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_gram_prime_missing_logged = false;
 		s->panel_rgb_handoff_synchronized = false;
 		s->panel_rgb_handoff_order_logged = false;
+		s->panel_rgb_pad_seen = false;
+		s->panel_te_rearm_pending = false;
+		s->panel_te_rearm_seen = false;
+		s->panel_te_rearm_missing_logged = false;
 	} else if (s->panel_cmd == 0xb0) {
 		s->panel_ramctrl_count = 0;
 	}
+    if (s->panel_cmd == 0x2c &&
+        s->panel_ramctrl_explicit &&
+        s->panel_rgb_handoff_synchronized &&
+        s->panel_rgb_pad_seen &&
+        !sf2000_panel_rgb_pad_is_active()) {
+        /* RAMWR is a command-only ownership rearm at every TE edge. */
+        s->panel_te_rearm_pending = true;
+    }
 	/* RAMWR is issued on every TE edge; retain useful early/periodic traces
 	 * without filling the QEMU log at the panel refresh rate. */
 	trace_command = s->panel_cmd_count <= 64 ||
@@ -6095,6 +6157,10 @@ static void sf2000_panel_gpio_write(hwaddr full_addr, uint32_t value)
             s->panel_gram_prime_missing_logged = false;
             s->panel_rgb_handoff_synchronized = false;
             s->panel_rgb_handoff_order_logged = false;
+            s->panel_rgb_pad_seen = false;
+            s->panel_te_rearm_pending = false;
+            s->panel_te_rearm_seen = false;
+            s->panel_te_rearm_missing_logged = false;
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: panel hardware reset RAMCTRL=00:f0\n");
         }
@@ -6605,6 +6671,12 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         } else if ((full_addr & ~3u) == SF2000_IRQ_ENABLE2) {
             sf2000_irq_enable2 = sf2000_regs[i].value;
         }
+    }
+
+    if (full_addr >= 0x188004a0 && full_addr <= 0x188004ab) {
+        sf2000_panel_te_rearm_observe(sf2000_lcd);
+    } else if (full_addr >= 0x18800500 && full_addr <= 0x1880050f) {
+        sf2000_panel_te_rearm_observe(sf2000_lcd);
     }
 
     if (sf2000_trace_sdio() &&
@@ -7323,6 +7395,25 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
                           rgb_pad_t00, rgb_pad_t04);
         }
         return 0;
+    }
+    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+        sf2000_panel_rgb_pad_is_active()) {
+        s->panel_rgb_pad_seen = true;
+        if (s->panel_te_rearm_pending && !s->panel_te_rearm_seen) {
+            s->panel_te_rearm_pending = false;
+            s->panel_te_rearm_seen = true;
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: panel TE/RAMWR rearm complete\n");
+        }
+        if (!s->panel_te_rearm_seen) {
+            sf2000_vou_present_unlatched_background(s);
+            if (!s->panel_te_rearm_missing_logged) {
+                s->panel_te_rearm_missing_logged = true;
+                qemu_log_mask(LOG_UNIMP,
+                              "sf2000: RGB scanout held until panel TE/RAMWR rearm\n");
+            }
+            return 0;
+        }
     }
     /*
      * The HC15 panel helper connects the completed VOU raster to PRGB with
