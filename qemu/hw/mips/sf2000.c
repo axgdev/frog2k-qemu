@@ -1433,9 +1433,9 @@ struct SF2000LCDState {
     bool panel_rgb_pad_seen;
     bool panel_te_rearm_pending;
     bool panel_te_rearm_seen;
-    bool panel_te_rearm_missing_logged;
+    bool panel_te_rearm_after_conditioning_logged;
+    bool panel_te_conditioning_logged;
     unsigned panel_te_rearm_count;
-    bool panel_te_rearm_since_vsync;
     uint8_t vou_timing_sequence;
     bool vou_timing_order_logged;
 };
@@ -1511,11 +1511,16 @@ static void sf2000_panel_te_rearm_observe(SF2000LCDState *s)
 
     s->panel_te_rearm_pending = false;
     s->panel_te_rearm_seen = true;
-    s->panel_te_rearm_since_vsync = true;
-    if (s->panel_te_rearm_count <= SF2000_PANEL_TE_CONDITIONING_EDGES ||
-        (s->panel_te_rearm_count % 60u) == 0u) {
+    if (s->panel_te_rearm_count <= SF2000_PANEL_TE_CONDITIONING_EDGES) {
         qemu_log_mask(LOG_UNIMP,
                       "sf2000: panel TE/RAMWR rearm complete count=%u\n",
+                      s->panel_te_rearm_count);
+    }
+    if (s->panel_te_rearm_count > SF2000_PANEL_TE_CONDITIONING_EDGES &&
+        !s->panel_te_rearm_after_conditioning_logged) {
+        s->panel_te_rearm_after_conditioning_logged = true;
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: panel TE/RAMWR rearm continued after conditioning count=%u\n",
                       s->panel_te_rearm_count);
     }
     /* The panel can become visible without another guest DMBA doorbell. */
@@ -3260,22 +3265,6 @@ static void sf2000_gpio_l_vsync_maybe_raise(void)
 
     if (sf2000_lcd && sf2000_lcd->panel_te_hz) {
         panel_te_hz = sf2000_lcd->panel_te_hz;
-    }
-
-    /* A real ST7789 keeps the RGB address phase only when the guest re-arms
-     * CASET/RASET/RAMWR at every TE boundary.  Enforce that contract in the
-     * model so stopping after startup conditioning reproduces a visible
-     * guest error instead of letting QEMU hide the physical top/bottom wrap. */
-    if (sf2000_lcd && sf2000_lcd->panel_te_rearm_seen &&
-        sf2000_lcd->panel_te_rearm_count >=
-        SF2000_PANEL_TE_CONDITIONING_EDGES) {
-        if (!sf2000_lcd->panel_te_rearm_since_vsync &&
-            !sf2000_lcd->panel_te_rearm_missing_logged) {
-            sf2000_lcd->panel_te_rearm_missing_logged = true;
-            qemu_log_mask(LOG_GUEST_ERROR,
-                          "sf2000: panel TE/RAMWR rearm missing before next TE\n");
-        }
-        sf2000_lcd->panel_te_rearm_since_vsync = false;
     }
 
     /*
@@ -6022,7 +6011,8 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
             if ((s->panel_ramctrl[0] & 0x13) == 0x11) {
                 s->panel_te_rearm_pending = false;
                 s->panel_te_rearm_seen = false;
-                s->panel_te_rearm_missing_logged = false;
+                s->panel_te_rearm_after_conditioning_logged = false;
+                s->panel_te_conditioning_logged = false;
                 s->panel_te_rearm_count = 0;
                 s->panel_rgb_handoff_synchronized =
                     s->vou_setup_seen && s->vou_latch_stage >= 10 &&
@@ -6136,9 +6126,9 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_rgb_pad_seen = false;
         s->panel_te_rearm_pending = false;
         s->panel_te_rearm_seen = false;
-        s->panel_te_rearm_missing_logged = false;
+        s->panel_te_rearm_after_conditioning_logged = false;
+        s->panel_te_conditioning_logged = false;
         s->panel_te_rearm_count = 0;
-        s->panel_te_rearm_since_vsync = false;
 	} else if (s->panel_cmd == 0xb0) {
 		s->panel_ramctrl_count = 0;
 	}
@@ -6260,8 +6250,8 @@ static void sf2000_panel_gpio_write(hwaddr full_addr, uint32_t value)
             s->panel_rgb_pad_seen = false;
             s->panel_te_rearm_pending = false;
             s->panel_te_rearm_seen = false;
-            s->panel_te_rearm_missing_logged = false;
-            s->panel_te_rearm_since_vsync = false;
+            s->panel_te_rearm_after_conditioning_logged = false;
+            s->panel_te_conditioning_logged = false;
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: panel hardware reset RAMCTRL=00:f0\n");
         }
@@ -7504,15 +7494,14 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         if (s->panel_te_rearm_pending && !s->panel_te_rearm_seen) {
             s->panel_te_rearm_pending = false;
             s->panel_te_rearm_seen = true;
-            s->panel_te_rearm_since_vsync = true;
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: panel TE/RAMWR rearm complete count=%u\n",
                           s->panel_te_rearm_count);
         }
         if (s->panel_te_rearm_count < SF2000_PANEL_TE_CONDITIONING_EDGES) {
             sf2000_vou_present_unlatched_background(s);
-            if (!s->panel_te_rearm_missing_logged) {
-                s->panel_te_rearm_missing_logged = true;
+            if (!s->panel_te_conditioning_logged) {
+                s->panel_te_conditioning_logged = true;
                 qemu_log_mask(LOG_UNIMP,
                               "sf2000: RGB scanout held until panel TE/RAMWR conditioning count=%u\n",
                               s->panel_te_rearm_count);
