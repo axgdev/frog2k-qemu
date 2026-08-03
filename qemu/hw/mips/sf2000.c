@@ -8262,6 +8262,11 @@ static void sf2000_cpu_reset(void *opaque)
     cpu_reset(CPU(cpu));
 
     if (loaderparams.kernel_filename) {
+        /* The physical SF2000 boot ROM selects this EBase and the silicon
+         * ignores later attempts to move it.  Keep the machine model on the
+         * same exception-vector contract so bare-metal guests exercise their
+         * relocated vectors in QEMU too. */
+        env->CP0_EBase = 0x81002000;
         env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
         if (loaderparams.linux_elf) {
             env->active_tc.gpr[4] = -2;
