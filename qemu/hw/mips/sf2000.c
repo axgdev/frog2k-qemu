@@ -1429,6 +1429,8 @@ struct SF2000LCDState {
     bool panel_gram_prime_missing_logged;
     bool panel_rgb_handoff_synchronized;
     bool panel_rgb_handoff_order_logged;
+    bool panel_rgb_handoff_reset_seen;
+    bool panel_rgb_handoff_reset_missing_logged;
     bool panel_pad_mux_invalid_logged;
     bool panel_rgb_pad_seen;
     bool panel_te_rearm_pending;
@@ -1500,10 +1502,17 @@ static bool sf2000_panel_rgb_pad_is_active(void)
            (t04 & 0x00ffffffu) == 0x00060606u;
 }
 
+static bool sf2000_panel_rgb_handoff_active(const SF2000LCDState *s)
+{
+    /* Linux/vendor H3 hands the ST7789 to the RGB raster after a short
+     * hardware reset; it does not write RAMCTRL at that ownership edge. */
+    return s && s->panel_rgb_handoff_synchronized &&
+           (s->panel_ramctrl_explicit || s->panel_rgb_handoff_reset_seen);
+}
+
 static void sf2000_panel_te_rearm_observe(SF2000LCDState *s)
 {
-    if (!s || !s->panel_ramctrl_explicit ||
-        !s->panel_rgb_handoff_synchronized ||
+    if (!sf2000_panel_rgb_handoff_active(s) ||
         !s->panel_te_rearm_pending ||
         !sf2000_panel_rgb_pad_is_active()) {
         return;
@@ -6061,6 +6070,15 @@ static void sf2000_panel_commit_arg(SF2000LCDState *s, uint16_t value)
         }
         break;
     case 0x2c:
+        if (s->vou_latch_stage >= 10 &&
+            sf2000_active_gma[0] != 0 &&
+            s->panel_gram_prime_complete &&
+            !s->panel_rgb_handoff_reset_seen &&
+            !s->panel_rgb_handoff_reset_missing_logged) {
+            s->panel_rgb_handoff_reset_missing_logged = true;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: RGB handoff missing post-prime panel reset\n");
+        }
         if (s->panel_x < sf2000_panel_raw_width(s) &&
             s->panel_y < sf2000_panel_raw_height(s)) {
             s->panel_pixels[s->panel_y * sf2000_panel_raw_width(s) + s->panel_x] =
@@ -6133,8 +6151,7 @@ static void sf2000_panel_latch(SF2000LCDState *s, uint16_t value)
 		s->panel_ramctrl_count = 0;
 	}
     if (s->panel_cmd == 0x2c &&
-        s->panel_ramctrl_explicit &&
-        s->panel_rgb_handoff_synchronized &&
+        sf2000_panel_rgb_handoff_active(s) &&
         s->panel_rgb_pad_seen &&
         !sf2000_panel_rgb_pad_is_active()) {
         /* RAMWR is a command-only ownership rearm during TE conditioning. */
@@ -6242,11 +6259,21 @@ static void sf2000_panel_gpio_write(hwaddr full_addr, uint32_t value)
             s->panel_ramctrl[1] = 0xf0;
             s->panel_ramctrl_count = 0;
             s->panel_ramctrl_handoff_logged = false;
-            s->panel_pixel_count = 0;
-            s->panel_gram_prime_complete = false;
+            /* The Linux/vendor H3 handoff resets the controller after the
+             * MCU GRAM prime.  The ST7789 resets command state and RAMCTRL,
+             * but the already-written GRAM remains available to the RGB
+             * raster; clearing the model's prime here would reject the
+             * proven handoff. */
             s->panel_gram_prime_missing_logged = false;
             s->panel_rgb_handoff_synchronized = false;
             s->panel_rgb_handoff_order_logged = false;
+            s->panel_rgb_handoff_reset_seen =
+                s->panel_gram_prime_complete;
+            if (s->panel_rgb_handoff_reset_seen) {
+                qemu_log_mask(LOG_UNIMP,
+                              "sf2000: panel post-prime reset observed\n");
+            }
+            s->panel_rgb_handoff_reset_missing_logged = false;
             s->panel_rgb_pad_seen = false;
             s->panel_te_rearm_pending = false;
             s->panel_te_rearm_seen = false;
@@ -7424,7 +7451,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
-    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+    if (sf2000_panel_rgb_handoff_active(s) &&
         sf2000_mmio_get32(0x188004a4, &rgb_clock_pinmux) &&
         ((rgb_clock_pinmux >> 24) & 0xf) != 6) {
         sf2000_vou_present_unlatched_background(s);
@@ -7436,7 +7463,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
-    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+    if (sf2000_panel_rgb_handoff_active(s) &&
         sf2000_mmio_get32(0x18800064, &rgb_clock_gate) &&
         sf2000_mmio_get32(0x18800060, &rgb_clock_gate0) &&
         (rgb_clock_gate & 0x00000600) != 0x00000600 &&
@@ -7451,7 +7478,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
-    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+    if (sf2000_panel_rgb_handoff_active(s) &&
         sf2000_mmio_get32(0x188004a8, &rgb_pinmux) &&
         (rgb_pinmux & 0xffu) != 0) {
         sf2000_vou_present_unlatched_background(s);
@@ -7463,7 +7490,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
-    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+    if (sf2000_panel_rgb_handoff_active(s) &&
         sf2000_mmio_get32(0x188004a4, &rgb_pad_l04) &&
         sf2000_mmio_get32(0x188004a0, &rgb_pad_l00) &&
         sf2000_mmio_get32(0x18800508, &rgb_pad_t08) &&
@@ -7488,7 +7515,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
-    if (s->panel_ramctrl_explicit && s->panel_rgb_handoff_synchronized &&
+    if (sf2000_panel_rgb_handoff_active(s) &&
         sf2000_panel_rgb_pad_is_active()) {
         s->panel_rgb_pad_seen = true;
         if (s->panel_te_rearm_pending && !s->panel_te_rearm_seen) {
@@ -7521,8 +7548,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
      * hides the Linux bank-address bug which produced a live scrambled raster
      * on physical SF2000 hardware.
      */
-    if (s->vou_setup_seen && s->panel_ramctrl_explicit &&
-        s->panel_rgb_handoff_synchronized &&
+    if (s->vou_setup_seen && sf2000_panel_rgb_handoff_active(s) &&
         sf2000_mmio_get32(0x188004a4, &rgb_clock_pinmux) &&
         ((rgb_clock_pinmux >> 24) & 0xf) == 6 &&
         sf2000_mmio_get32(0x18808084, &vou_ctrl) &&
