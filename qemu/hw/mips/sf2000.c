@@ -1849,9 +1849,48 @@ static bool sf2000_sdio_irq_pending;
 static bool sf2000_sdio_callback_pending;
 static bool sf2000_sdio_app_cmd;
 static uint8_t sf2000_sdio_bus_width;
+static bool sf2000_sdio_stall_once_consumed;
 static bool sf2000_sb_timer_irq_masked;
 static BlockBackend *sf2000_sdio_blk;
 static GHashTable *sf2000_sdio_synth_sectors;
+
+static bool sf2000_sdio_should_stall_once(uint32_t lba)
+{
+    const char *setting = g_getenv("SF2000_SDIO_STALL_ONCE_LBA");
+    char *end = NULL;
+    uint64_t requested;
+    uint32_t pc;
+
+    if (!setting || !setting[0] || sf2000_sdio_stall_once_consumed) {
+        return false;
+    }
+    if (!current_cpu) {
+        return false;
+    }
+    pc = (uint32_t)MIPS_CPU(current_cpu)->env.active_tc.PC;
+    /* The stock bootloader also reads the selected LBA.  Fault injection is
+     * for the replacement OS driver, whose image occupies low KSEG0. */
+    if (pc >= 0x81000000u) {
+        return false;
+    }
+    requested = g_ascii_strtoull(setting, &end, 0);
+    if (!end || *end || requested > UINT32_MAX || requested != lba) {
+        return false;
+    }
+    sf2000_sdio_stall_once_consumed = true;
+    return true;
+}
+
+static void sf2000_sdio_ip_reset(void)
+{
+    sf2000_sdio_xfer_done = false;
+    sf2000_sdio_xfer_busy = false;
+    sf2000_sdio_write_active = false;
+    sf2000_sdio_pio_state = 0;
+    sf2000_sdio_irq_pending = false;
+    sf2000_sdio_callback_pending = false;
+    info_report("sf2000: SDIO host IP reset");
+}
 static char sf2000_uart_line[2][256];
 static uint32_t sf2000_uart_line_len[2];
 static uint8_t sf2000_uart_ier[2];
@@ -5614,12 +5653,30 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_resp[0] = 0;
         break;
     case 17:
+        if (sf2000_sdio_should_stall_once(sf2000_sdio_arg)) {
+            sf2000_sdio_xfer_done = false;
+            sf2000_sdio_xfer_busy = true;
+            sf2000_sdio_callback_pending = false;
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: sdio injected one-shot stall lba=%u\n",
+                          sf2000_sdio_arg);
+            return;
+        }
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = true;
         sf2000_sdio_dma_read(sf2000_sdio_arg);
         sf2000_sdio_resp[0] = 0;
         break;
     case 18:
+        if (sf2000_sdio_should_stall_once(sf2000_sdio_arg)) {
+            sf2000_sdio_xfer_done = false;
+            sf2000_sdio_xfer_busy = true;
+            sf2000_sdio_callback_pending = false;
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: sdio injected one-shot stall lba=%u\n",
+                          sf2000_sdio_arg);
+            return;
+        }
         sf2000_sdio_xfer_done = false;
         sf2000_sdio_xfer_busy = true;
         sf2000_sdio_dma_read(sf2000_sdio_arg);
@@ -6794,6 +6851,12 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             (old_value & BIT(5)) && !(sf2000_regs[i].value & BIT(5))) {
             sf2000_audio_apll_reset_seen = true;
         }
+    }
+    if (i != ARRAY_SIZE(sf2000_regs) &&
+        (full_addr & ~3u) == 0x18800084 &&
+        !(old_value & BIT(18)) &&
+        (sf2000_regs[i].value & BIT(18))) {
+        sf2000_sdio_ip_reset();
     }
     if (size == 4 && ((full_addr >= 0x18808000 &&
                        full_addr <= 0x188081ec) ||
@@ -8455,6 +8518,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_callback_pending = false;
     sf2000_sdio_app_cmd = false;
     sf2000_sdio_bus_width = 1;
+    sf2000_sdio_stall_once_consumed = false;
     sf2000_last_unifrog_trace_count = 0;
     sf2000_last_unifrog_trace_valid = false;
     memset(sf2000_active_gma, 0, sizeof(sf2000_active_gma));
