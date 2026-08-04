@@ -5886,6 +5886,14 @@ static bool sf2000_sdio_cmd8_legacy_response(void)
            (!strcmp(setting, "1") || !strcmp(setting, "yes"));
 }
 
+static bool sf2000_sdio_cmd8_malformed_response(void)
+{
+    const char *setting = g_getenv("SF2000_SDIO_CMD8_MALFORMED");
+
+    return sf2000_sdio_native_guest() && setting &&
+           (!strcmp(setting, "1") || !strcmp(setting, "yes"));
+}
+
 static bool sf2000_sdio_validate_native_command_control(void)
 {
     uint8_t expected;
@@ -6034,7 +6042,15 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_set_short_response(0x00010000); /* R6: RCA 1. */
         break;
     case 8:
-        if (sf2000_sdio_cmd8_legacy_response()) {
+        if (sf2000_sdio_cmd8_malformed_response()) {
+            /* Physical logn059 captured a completed CMD8 whose decoded
+             * response was 0x00000900 rather than the SD-v2 0x1aa pattern.
+             * Keep this fault mode separate from an ordinary SD-v1 illegal
+             * command so QEMU exercises the controller-framing fallback. */
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: SDIO native CMD8 malformed response\n");
+            sf2000_sdio_set_short_response(0x00000900);
+        } else if (sf2000_sdio_cmd8_legacy_response()) {
             /* SD v1.x cards complete CMD8 with R1/illegal-command rather
              * than the R7 0x1aa pattern. */
             qemu_log_mask(LOG_UNIMP,
