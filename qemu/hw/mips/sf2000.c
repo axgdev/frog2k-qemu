@@ -2065,6 +2065,7 @@ static bool sf2000_audio_setup_logged;
 static bool sf2000_handoff_flush_logged;
 static bool sf2000_handoff_target_logged;
 static bool sf2000_handoff_exception_logged;
+static uint32_t sf2000_handoff_trace_mask;
 
 typedef struct SF2000KeyMap {
     QKeyCode qcode;
@@ -2606,6 +2607,49 @@ static bool sf2000_find_handoff_diag(hwaddr *diag)
     return false;
 }
 
+static void sf2000_trace_linux_handoff_stages(hwaddr diag)
+{
+    static const struct {
+        uint32_t offset;
+        uint32_t marker;
+        const char *name;
+    } stages[] = {
+        { 0xf0U, 0x4c435254U, "C-entry" },
+        { 0xf8U, 0x4c4c4f47U, "bootlog-init" },
+        { 0x100U, 0x4c454c46U, "ELF-valid" },
+        { 0x108U, 0x4c4d4150U, "mapping-ready" },
+        { 0x110U, 0x4c4a4d50U, "kernel-jump" },
+        { 0x118U, 0x4c445442U, "DTB-ready" },
+    };
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(stages); i++) {
+        MemTxResult res;
+        uint32_t marker;
+        uint32_t value;
+
+        if (sf2000_handoff_trace_mask & (1U << i)) {
+            continue;
+        }
+        marker = address_space_ldl_le(&address_space_memory,
+                                     diag + stages[i].offset,
+                                     MEMTXATTRS_UNSPECIFIED, &res);
+        if (res != MEMTX_OK || marker != stages[i].marker) {
+            continue;
+        }
+        value = address_space_ldl_le(&address_space_memory,
+                                     diag + stages[i].offset + 4U,
+                                     MEMTXATTRS_UNSPECIFIED, &res);
+        if (res != MEMTX_OK) {
+            continue;
+        }
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: boot handoff target stage=%s value=0x%08x\n",
+                      stages[i].name, value);
+        sf2000_handoff_trace_mask |= 1U << i;
+    }
+}
+
 static void sf2000_trace_boot_handoff(void)
 {
     MemTxResult res;
@@ -2649,6 +2693,7 @@ static void sf2000_trace_boot_handoff(void)
         return;
     }
     if (sf2000_handoff_flush_logged) {
+        sf2000_trace_linux_handoff_stages(diag);
         target_entry = address_space_ldl_le(&address_space_memory,
                                             diag + 0xc0,
                                             MEMTXATTRS_UNSPECIFIED, &res);
@@ -9299,6 +9344,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_handoff_flush_logged = false;
     sf2000_handoff_target_logged = false;
     sf2000_handoff_exception_logged = false;
+    sf2000_handoff_trace_mask = 0;
 
     sf2000_sdio_arg = 0;
     sf2000_sdio_cmd = 0;
