@@ -5019,12 +5019,14 @@ static void sf2000_ge_start_queue(void)
     uint32_t status = 0;
     uint32_t first = 0;
     uint32_t last = 0;
+    uint32_t start = 0;
     uint32_t clock_gate = 0;
     uint32_t context[7] = { 0 };
 
     sf2000_mmio_get32(SF2000_GE_STATUS, &status);
     sf2000_mmio_get32(SF2000_GE_HQ_FIRST, &first);
     sf2000_mmio_get32(SF2000_GE_HQ_LAST, &last);
+    sf2000_mmio_get32(SF2000_GE_START, &start);
     if (sf2000_mmio_get32(0x18800064, &clock_gate) &&
         (clock_gate & BIT(4)) != 0u) {
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -5038,6 +5040,12 @@ static void sf2000_ge_start_queue(void)
     if (status & SF2000_GE_STATUS_BUSY) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "sf2000: GE doorbell while command queue busy\n");
+        return;
+    }
+    if ((start & 3u) != 2u) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: GE invalid queue start mode start=%08x\n",
+                      start);
         return;
     }
     /* HC15xx uses the context immediately preceding the command arena as
