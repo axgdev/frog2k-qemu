@@ -1902,6 +1902,7 @@ static bool sf2000_sdio_irq_pending;
 static bool sf2000_sdio_callback_pending;
 static bool sf2000_sdio_app_cmd;
 static uint8_t sf2000_sdio_bus_width;
+static uint8_t sf2000_sdio_host_bus_width;
 static unsigned int sf2000_sdio_malformed_ocr_probes;
 static uint8_t sf2000_sdio_dma_control;
 static uint8_t sf2000_sdio_cmd_control;
@@ -2005,6 +2006,7 @@ static void sf2000_sdio_ip_reset(void)
     sf2000_sdio_callback_pending = false;
     sf2000_sdio_dma_control = 0x20;
     sf2000_sdio_cmd_control = 0;
+    sf2000_sdio_host_bus_width = 1;
     sf2000_sdio_dma_word_start = false;
     sf2000_sdio_reset_dma_contract_violation = false;
     sf2000_sdio_contract_command_failed = false;
@@ -5762,6 +5764,14 @@ static void sf2000_sdio_dma_read(uint32_t lba)
 
 static bool sf2000_sdio_dma_read_enabled(void)
 {
+    if (sf2000_sdio_strict_native() && sf2000_sdio_host_bus_width == 4 &&
+        !(sf2000_sdio_cmd_control & 0x80)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: SDIO 4-bit data command missing bus mode "
+                      "cmdctl=0x%02x\n", sf2000_sdio_cmd_control);
+        return false;
+    }
+
     if ((sf2000_sdio_dma_control & 0x21) == 0x21 &&
         (sf2000_sdio_dma_word_start || (sf2000_sdio_cmd_control & 0x80))) {
         return true;
@@ -5960,6 +5970,13 @@ static bool sf2000_sdio_validate_native_command_control(void)
     default:
         expected = 0x10;
         break;
+    }
+
+    /* Vendor host private byte +0x48 contains the encoded bus width and also
+     * selects HC15xx command mode bit 7.  Once ACMD6 enters 4-bit mode this
+     * bit is required even though a command without it may appear to finish. */
+    if (sf2000_sdio_host_bus_width == 4) {
+        expected |= 0x80;
     }
 
     actual = sf2000_sdio_cmd_control & (uint8_t)~1u;
@@ -7762,14 +7779,19 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         }
     } else if (full_addr == 0x1884c00e) {
         sf2000_sdio_pio_state = value & 0xff;
-    } else if (full_addr == 0x1884c00b && (value & 0x04)) {
-        sf2000_sdio_xfer_done = false;
-        sf2000_sdio_xfer_busy = false;
-        sf2000_sdio_write_active = false;
-        sf2000_sdio_irq_pending = false;
-        sf2000_sdio_pio_state &= ~0x04;
-        sf2000_sdio_pio_state |= 0x01;
-        sf2000_sdio_pio_state &= ~0x01;
+    } else if (full_addr == 0x1884c00b) {
+        if (value & 0x08) {
+            sf2000_sdio_host_bus_width = 4;
+        } else if (value & 0x04) {
+            sf2000_sdio_host_bus_width = 1;
+            sf2000_sdio_xfer_done = false;
+            sf2000_sdio_xfer_busy = false;
+            sf2000_sdio_write_active = false;
+            sf2000_sdio_irq_pending = false;
+            sf2000_sdio_pio_state &= ~0x04;
+            sf2000_sdio_pio_state |= 0x01;
+            sf2000_sdio_pio_state &= ~0x01;
+        }
     } else if (full_addr == 0x1884c000) {
         sf2000_sdio_cmd_control = value & 0xff;
         if (value & 1) {
@@ -9072,6 +9094,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_callback_pending = false;
     sf2000_sdio_app_cmd = false;
     sf2000_sdio_bus_width = 1;
+    sf2000_sdio_host_bus_width = 1;
     sf2000_sdio_malformed_ocr_probes = 0;
     sf2000_sdio_dma_control = 0x20;
     sf2000_sdio_cmd_control = 0;
