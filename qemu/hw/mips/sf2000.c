@@ -428,6 +428,7 @@ static uint32_t sf2000_usb_power_reg[2];
 static uint32_t sf2000_usb_devctl_reg[2];
 static bool sf2000_mmio_get32(hwaddr addr, uint32_t *value);
 static void sf2000_mmio_set32(hwaddr addr, uint32_t value);
+static void sf2000_ge_hw_reset(void);
 static void sf2000_update_irq(void);
 static uint32_t sf2000_panel_sample_readback_l(SF2000LCDState *s,
                                                uint32_t value);
@@ -4973,6 +4974,24 @@ static void sf2000_ge_complete_queue(void)
     }
 }
 
+static void sf2000_ge_hw_reset(void)
+{
+    /* The HC15xx reset clears both the active command and its consumer
+     * pointers.  Keeping the old HQ_FIRST here would make a guest that
+     * correctly resets its retained command context look as if it rewound an
+     * invalid ring. */
+    sf2000_ge_irq_pending = false;
+    sf2000_ge_queue_min = 0;
+    if (sf2000_ge_timer) {
+        timer_del(sf2000_ge_timer);
+    }
+    sf2000_mmio_set32(SF2000_GE_CTRL, 0);
+    sf2000_mmio_set32(SF2000_GE_START, 0);
+    sf2000_mmio_set32(SF2000_GE_STATUS, 0);
+    sf2000_mmio_set32(SF2000_GE_HQ_FIRST, 0);
+    sf2000_mmio_set32(SF2000_GE_HQ_LAST, 0);
+}
+
 static void sf2000_ge_timer_cb(void *opaque)
 {
     uint32_t status = 0;
@@ -7399,6 +7418,12 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         (sf2000_regs[i].value & BIT(18))) {
         sf2000_sdio_ip_reset();
     }
+    if (i != ARRAY_SIZE(sf2000_regs) &&
+        (full_addr & ~3u) == 0x18800080 &&
+        !(old_value & BIT(4)) &&
+        (sf2000_regs[i].value & BIT(4))) {
+        sf2000_ge_hw_reset();
+    }
     if (size == 4 && ((full_addr >= 0x18808000 &&
                        full_addr <= 0x188081ec) ||
                       full_addr == 0x18800078 ||
@@ -9070,14 +9095,9 @@ static void sf2000_cpu_reset(void *opaque)
 
     sf2000_wdt_count = 0;
     sf2000_wdt_disable();
-    sf2000_ge_irq_pending = false;
+    sf2000_ge_hw_reset();
     sf2000_ge_submit_sequence = 0;
     sf2000_ge_irq_ack_sequence = 0;
-    sf2000_ge_queue_min = 0;
-    if (sf2000_ge_timer) {
-        timer_del(sf2000_ge_timer);
-    }
-    sf2000_mmio_set32(SF2000_GE_STATUS, 0);
 
     sf2000_sdio_arg = 0;
     sf2000_sdio_cmd = 0;
