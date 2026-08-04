@@ -2079,6 +2079,11 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
 #define SF2000_HANDOFF_DIAG_PHYS   0x07a10000ULL
 #define SF2000_HANDOFF_BEGIN       0x42544844U
 #define SF2000_HANDOFF_ROM_FLUSH   0x52464c55U
+#define SF2000_BOOT_STAGE_PHYS     0x07000000ULL
+#define SF2000_BOOT_STAGE_END      0x07e00000ULL
+#define SF2000_BOOT_FASTBOOT_PHYS  0x07fe0000ULL
+#define SF2000_BOOT_HANDOFF_PHYS  0x07ff7000ULL
+#define SF2000_BOOT_HANDOFF_BYTES  0x00001000ULL
 
 typedef struct SF2000ProgressEntry {
     uint32_t seq;
@@ -2481,8 +2486,17 @@ static void sf2000_trace_boot_handoff(void)
     MemTxResult res;
     uint32_t begin;
     uint32_t flushed;
+    uint32_t payload_size;
+    uint32_t source_vaddr;
+    uint32_t destination_vaddr;
+    uint32_t handoff_vaddr;
+    uint32_t stage_end_vaddr;
     uint32_t destination_entry[2];
     uint32_t source_entry[2];
+    hwaddr source_phys;
+    hwaddr destination_phys;
+    hwaddr handoff_phys;
+    hwaddr stage_end_phys;
 
     begin = address_space_ldl_le(&address_space_memory,
                                  SF2000_HANDOFF_DIAG_PHYS + 0x40,
@@ -2498,6 +2512,46 @@ static void sf2000_trace_boot_handoff(void)
         return;
     }
     if (sf2000_handoff_flush_logged) {
+        return;
+    }
+
+    payload_size = address_space_ldl_le(&address_space_memory,
+                                        SF2000_HANDOFF_DIAG_PHYS + 0x44,
+                                        MEMTXATTRS_UNSPECIFIED, &res);
+    source_vaddr = address_space_ldl_le(&address_space_memory,
+                                        SF2000_HANDOFF_DIAG_PHYS + 0x70,
+                                        MEMTXATTRS_UNSPECIFIED, &res);
+    destination_vaddr = address_space_ldl_le(
+        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x48,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    handoff_vaddr = address_space_ldl_le(&address_space_memory,
+                                         SF2000_HANDOFF_DIAG_PHYS + 0x74,
+                                         MEMTXATTRS_UNSPECIFIED, &res);
+    stage_end_vaddr = address_space_ldl_le(&address_space_memory,
+                                           SF2000_HANDOFF_DIAG_PHYS + 0x78,
+                                           MEMTXATTRS_UNSPECIFIED, &res);
+    if (res != MEMTX_OK) {
+        return;
+    }
+
+    source_phys = sf2000_guest_phys_addr(source_vaddr);
+    destination_phys = sf2000_guest_phys_addr(destination_vaddr);
+    handoff_phys = sf2000_guest_phys_addr(handoff_vaddr);
+    stage_end_phys = sf2000_guest_phys_addr(stage_end_vaddr);
+    if (source_phys < SF2000_BOOT_STAGE_PHYS ||
+        source_phys > SF2000_BOOT_STAGE_PHYS + 0x200ULL ||
+        stage_end_phys != SF2000_BOOT_STAGE_END ||
+        payload_size > SF2000_BOOT_STAGE_END - source_phys ||
+        destination_phys + payload_size > SF2000_RAM_DEFAULT ||
+        handoff_phys != SF2000_BOOT_HANDOFF_PHYS ||
+        handoff_phys < SF2000_BOOT_FASTBOOT_PHYS ||
+        handoff_phys + SF2000_BOOT_HANDOFF_BYTES > 0x08000000ULL) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: boot handoff memory layout invalid"
+                      " source=0x%08x dest=0x%08x size=0x%08x"
+                      " stage_end=0x%08x handoff=0x%08x\n",
+                      source_vaddr, destination_vaddr, payload_size,
+                      stage_end_vaddr, handoff_vaddr);
         return;
     }
 
@@ -2524,12 +2578,14 @@ static void sf2000_trace_boot_handoff(void)
     }
 
     qemu_log_mask(LOG_UNIMP,
-                  "sf2000: boot handoff ROM cache flush returned entry=%08x/%08x\n",
-                  destination_entry[0], destination_entry[1]);
+                  "sf2000: boot handoff ROM cache flush returned"
+                  " payload=%u entry=%08x/%08x\n",
+                  payload_size, destination_entry[0], destination_entry[1]);
     if (sf2000_trace_pc_enabled()) {
         fprintf(stderr,
-                "sf2000: boot handoff ROM cache flush returned entry=%08x/%08x\n",
-                destination_entry[0], destination_entry[1]);
+                "sf2000: boot handoff ROM cache flush returned"
+                " payload=%u entry=%08x/%08x\n",
+                payload_size, destination_entry[0], destination_entry[1]);
     }
     sf2000_handoff_flush_logged = true;
 }
