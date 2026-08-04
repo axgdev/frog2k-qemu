@@ -1994,6 +1994,7 @@ static int sf2000_patch_archive_path_enabled_cache = -1;
 static int sf2000_patch_archive_access_enabled_cache = -1;
 static uint32_t sf2000_last_progress_seq;
 static bool sf2000_last_progress_valid;
+static hwaddr sf2000_last_progress_base;
 static uint32_t sf2000_last_unifrog_trace_count;
 static bool sf2000_last_unifrog_trace_valid;
 static bool sf2000_audio_setup_logged;
@@ -2071,17 +2072,23 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
     { 0x047c0050, 0x047d0000, "storage_probe" },
 };
 
-#define SF2000_PROGRESS_PHYS      0x07a00000ULL
+#define SF2000_PROGRESS_PHYS      0x06800000ULL
+#define SF2000_LEGACY_PROGRESS_PHYS 0x07a00000ULL
 #define SF2000_PROGRESS_MAGIC     0x52504653U
 #define SF2000_PROGRESS_VERSION   1U
 #define SF2000_PROGRESS_ENTRIES   1024U
 #define SF2000_PROGRESS_NAME_LEN   32U
-#define SF2000_HANDOFF_DIAG_PHYS   0x07a10000ULL
+#define SF2000_HANDOFF_DIAG_PHYS   0x06820000ULL
+#define SF2000_LEGACY_HANDOFF_DIAG_PHYS 0x07a10000ULL
 #define SF2000_HANDOFF_BEGIN       0x42544844U
 #define SF2000_HANDOFF_ROM_FLUSH   0x52464c55U
+#define SF2000_HANDOFF_VENDOR_RESTORED 0x56414249U
 #define SF2000_BOOT_STAGE_PHYS     0x07000000ULL
-#define SF2000_BOOT_STAGE_END      0x07e00000ULL
+#define SF2000_BOOT_STAGE_ADDR     0x87000000U
+#define SF2000_BOOT_STAGE_END      0x07fe0000ULL
+#define SF2000_BOOT_STAGE_END_ADDR 0x87fe0000U
 #define SF2000_BOOT_FASTBOOT_PHYS  0x07fe0000ULL
+#define SF2000_BOOT_HANDOFF_ADDR   0x87ff7000U
 #define SF2000_BOOT_HANDOFF_PHYS  0x07ff7000ULL
 #define SF2000_BOOT_HANDOFF_BYTES  0x00001000ULL
 
@@ -2340,8 +2347,18 @@ static void sf2000_trace_progress_log(void)
 
     if (!sf2000_progress_read_u32(base, &magic) ||
         magic != SF2000_PROGRESS_MAGIC) {
+        base = SF2000_LEGACY_PROGRESS_PHYS;
+        if (!sf2000_progress_read_u32(base, &magic) ||
+            magic != SF2000_PROGRESS_MAGIC) {
+            sf2000_last_progress_valid = false;
+            sf2000_last_progress_base = 0;
+            return;
+        }
+    }
+    if (sf2000_last_progress_base != base) {
+        sf2000_last_progress_seq = 0;
         sf2000_last_progress_valid = false;
-        return;
+        sf2000_last_progress_base = base;
     }
     if (!sf2000_progress_read_u32(base + 4, &version) ||
         version != SF2000_PROGRESS_VERSION ||
@@ -2481,10 +2498,37 @@ static void sf2000_trace_unifrog_log(void)
     sf2000_last_unifrog_trace_valid = true;
 }
 
+static bool sf2000_find_handoff_diag(hwaddr *diag)
+{
+    hwaddr candidates[2];
+    unsigned int i;
+
+    if (sf2000_last_progress_base == SF2000_LEGACY_PROGRESS_PHYS) {
+        candidates[0] = SF2000_LEGACY_HANDOFF_DIAG_PHYS;
+        candidates[1] = SF2000_HANDOFF_DIAG_PHYS;
+    } else {
+        candidates[0] = SF2000_HANDOFF_DIAG_PHYS;
+        candidates[1] = SF2000_LEGACY_HANDOFF_DIAG_PHYS;
+    }
+
+    for (i = 0; i < 2; i++) {
+        MemTxResult res;
+        uint32_t begin = address_space_ldl_le(
+            &address_space_memory, candidates[i] + 0x40,
+            MEMTXATTRS_UNSPECIFIED, &res);
+
+        if (res == MEMTX_OK && begin == SF2000_HANDOFF_BEGIN) {
+            *diag = candidates[i];
+            return true;
+        }
+    }
+    return false;
+}
+
 static void sf2000_trace_boot_handoff(void)
 {
     MemTxResult res;
-    uint32_t begin;
+    hwaddr diag;
     uint32_t flushed;
     uint32_t payload_size;
     uint32_t source_vaddr;
@@ -2493,19 +2537,17 @@ static void sf2000_trace_boot_handoff(void)
     uint32_t stage_end_vaddr;
     uint32_t destination_entry[2];
     uint32_t source_entry[2];
+    uint32_t vendor_state;
     hwaddr source_phys;
     hwaddr destination_phys;
     hwaddr handoff_phys;
     hwaddr stage_end_phys;
 
-    begin = address_space_ldl_le(&address_space_memory,
-                                 SF2000_HANDOFF_DIAG_PHYS + 0x40,
-                                 MEMTXATTRS_UNSPECIFIED, &res);
-    if (res != MEMTX_OK || begin != SF2000_HANDOFF_BEGIN) {
+    if (!sf2000_find_handoff_diag(&diag)) {
         return;
     }
     flushed = address_space_ldl_le(&address_space_memory,
-                                   SF2000_HANDOFF_DIAG_PHYS + 0x6c,
+                                   diag + 0x6c,
                                    MEMTXATTRS_UNSPECIFIED, &res);
     if (res != MEMTX_OK || flushed != SF2000_HANDOFF_ROM_FLUSH) {
         sf2000_handoff_flush_logged = false;
@@ -2516,19 +2558,19 @@ static void sf2000_trace_boot_handoff(void)
     }
 
     payload_size = address_space_ldl_le(&address_space_memory,
-                                        SF2000_HANDOFF_DIAG_PHYS + 0x44,
+                                        diag + 0x44,
                                         MEMTXATTRS_UNSPECIFIED, &res);
     source_vaddr = address_space_ldl_le(&address_space_memory,
-                                        SF2000_HANDOFF_DIAG_PHYS + 0x70,
+                                        diag + 0x70,
                                         MEMTXATTRS_UNSPECIFIED, &res);
     destination_vaddr = address_space_ldl_le(
-        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x48,
+        &address_space_memory, diag + 0x48,
         MEMTXATTRS_UNSPECIFIED, &res);
     handoff_vaddr = address_space_ldl_le(&address_space_memory,
-                                         SF2000_HANDOFF_DIAG_PHYS + 0x74,
+                                         diag + 0x74,
                                          MEMTXATTRS_UNSPECIFIED, &res);
     stage_end_vaddr = address_space_ldl_le(&address_space_memory,
-                                           SF2000_HANDOFF_DIAG_PHYS + 0x78,
+                                           diag + 0x78,
                                            MEMTXATTRS_UNSPECIFIED, &res);
     if (res != MEMTX_OK) {
         return;
@@ -2538,7 +2580,11 @@ static void sf2000_trace_boot_handoff(void)
     destination_phys = sf2000_guest_phys_addr(destination_vaddr);
     handoff_phys = sf2000_guest_phys_addr(handoff_vaddr);
     stage_end_phys = sf2000_guest_phys_addr(stage_end_vaddr);
-    if (source_phys < SF2000_BOOT_STAGE_PHYS ||
+    if ((source_vaddr != SF2000_BOOT_STAGE_ADDR &&
+         source_vaddr != SF2000_BOOT_STAGE_ADDR + 0x200U) ||
+        stage_end_vaddr != SF2000_BOOT_STAGE_END_ADDR ||
+        handoff_vaddr != SF2000_BOOT_HANDOFF_ADDR ||
+        source_phys < SF2000_BOOT_STAGE_PHYS ||
         source_phys > SF2000_BOOT_STAGE_PHYS + 0x200ULL ||
         stage_end_phys != SF2000_BOOT_STAGE_END ||
         payload_size > SF2000_BOOT_STAGE_END - source_phys ||
@@ -2556,17 +2602,28 @@ static void sf2000_trace_boot_handoff(void)
     }
 
     destination_entry[0] = address_space_ldl_le(
-        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x5c,
+        &address_space_memory, diag + 0x5c,
         MEMTXATTRS_UNSPECIFIED, &res);
     destination_entry[1] = address_space_ldl_le(
-        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x60,
+        &address_space_memory, diag + 0x60,
         MEMTXATTRS_UNSPECIFIED, &res);
     source_entry[0] = address_space_ldl_le(
-        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x64,
+        &address_space_memory, diag + 0x64,
         MEMTXATTRS_UNSPECIFIED, &res);
     source_entry[1] = address_space_ldl_le(
-        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x68,
+        &address_space_memory, diag + 0x68,
         MEMTXATTRS_UNSPECIFIED, &res);
+    vendor_state = address_space_ldl_le(
+        &address_space_memory, diag + 0x7c,
+        MEMTXATTRS_UNSPECIFIED, &res);
+
+    if (diag == SF2000_HANDOFF_DIAG_PHYS &&
+        (res != MEMTX_OK || vendor_state != SF2000_HANDOFF_VENDOR_RESTORED)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: boot handoff vendor state was not restored"
+                      " marker=0x%08x\n", vendor_state);
+        return;
+    }
 
     if (memcmp(destination_entry, source_entry,
                sizeof(destination_entry)) != 0) {
@@ -2579,8 +2636,9 @@ static void sf2000_trace_boot_handoff(void)
 
     qemu_log_mask(LOG_UNIMP,
                   "sf2000: boot handoff ROM cache flush returned"
-                  " payload=%u entry=%08x/%08x\n",
-                  payload_size, destination_entry[0], destination_entry[1]);
+                  " payload=%u entry=%08x/%08x vendor_state=%s\n",
+                  payload_size, destination_entry[0], destination_entry[1],
+                  diag == SF2000_HANDOFF_DIAG_PHYS ? "restored" : "legacy");
     if (sf2000_trace_pc_enabled()) {
         fprintf(stderr,
                 "sf2000: boot handoff ROM cache flush returned"
