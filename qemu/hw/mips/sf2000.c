@@ -1906,9 +1906,46 @@ static uint8_t sf2000_sdio_dma_control;
 static uint8_t sf2000_sdio_cmd_control;
 static bool sf2000_sdio_dma_word_start;
 static bool sf2000_sdio_stall_once_consumed;
+static bool sf2000_sdio_reset_dma_contract_violation;
+static bool sf2000_sdio_contract_command_failed;
+static bool sf2000_sdio_reset_contract_window;
 static bool sf2000_sb_timer_irq_masked;
 static BlockBackend *sf2000_sdio_blk;
 static GHashTable *sf2000_sdio_synth_sectors;
+
+static bool sf2000_sdio_native_guest(void)
+{
+    uint32_t pc;
+
+    if (!current_cpu) {
+        return false;
+    }
+    pc = (uint32_t)MIPS_CPU(current_cpu)->env.active_tc.PC;
+    /* The stock first-stage loader runs in the high KSEG0 window. */
+    return pc < 0x81000000u;
+}
+
+static bool sf2000_sdio_strict_native(void)
+{
+    const char *setting = g_getenv("SF2000_SDIO_STRICT_NATIVE");
+
+    return sf2000_sdio_native_guest() && setting &&
+           (!strcmp(setting, "1") || !strcmp(setting, "yes"));
+}
+
+static uint8_t sf2000_sdio_terminal_status(void)
+{
+    const char *setting = g_getenv("SF2000_SDIO_TERMINAL_STATUS");
+
+    /* e8 is a physical terminal value seen after successful no-data
+     * commands.  Keep e4 as the default for existing stock-firmware traces,
+     * while allowing the native-driver smoke to exercise the raw decoder. */
+    if (sf2000_sdio_native_guest() && setting &&
+        (!strcmp(setting, "e8") || !strcmp(setting, "0xe8"))) {
+        return 0xe8;
+    }
+    return 0xe4;
+}
 
 static bool sf2000_sdio_should_stall_once(uint32_t lba)
 {
@@ -1948,6 +1985,9 @@ static void sf2000_sdio_ip_reset(void)
     sf2000_sdio_dma_control = 0x20;
     sf2000_sdio_cmd_control = 0;
     sf2000_sdio_dma_word_start = false;
+    sf2000_sdio_reset_dma_contract_violation = false;
+    sf2000_sdio_contract_command_failed = false;
+    sf2000_sdio_reset_contract_window = true;
     info_report("sf2000: SDIO host IP reset");
 }
 static char sf2000_uart_line[2][256];
@@ -5862,6 +5902,27 @@ static void sf2000_sdio_complete_cmd(void)
 {
     bool is_app_cmd = sf2000_sdio_app_cmd && sf2000_sdio_cmd != 55;
 
+    /* Linux/vendor HC15xx initialization never writes the reset-time idle
+     * value back to the shared DMA/IRQ register.  On the physical controller
+     * doing so can leave the first command (normally CMD0) with its start bit
+     * set forever.  Keep the default model permissive for old stock traces,
+     * but let the native-driver smoke opt into this observed contract. */
+    if (sf2000_sdio_strict_native() &&
+        sf2000_sdio_reset_dma_contract_violation) {
+        sf2000_sdio_contract_command_failed = true;
+        sf2000_sdio_reset_contract_window = false;
+        sf2000_sdio_xfer_done = false;
+        sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_irq_pending = false;
+        sf2000_sdio_callback_pending = false;
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: SDIO native contract violation: "
+                      "reset-time DMA control write blocked command %u\n",
+                      sf2000_sdio_cmd);
+        return;
+    }
+    sf2000_sdio_reset_contract_window = false;
+
     sf2000_sdio_resp[0] = 0;
     sf2000_sdio_resp[1] = 0;
     sf2000_sdio_resp[2] = 0;
@@ -6990,7 +7051,9 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
          * The helper traces show an in-flight 0xa8 family while the controller
          * is busy and the terminal 0xe4 family once the transfer completes.
          */
-        value = (sf2000_sdio_xfer_busy || sf2000_sdio_write_active) ? 0xa8 : 0xe4;
+        value = (sf2000_sdio_xfer_busy || sf2000_sdio_write_active) ? 0xa8 :
+                (sf2000_sdio_contract_command_failed ? 0xe8 :
+                 sf2000_sdio_terminal_status());
     } else if (full_addr == 0x1884c00e) {
         value = sf2000_sdio_pio_state;
     } else if (full_addr == 0x1884c00b) {
@@ -7547,6 +7610,14 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             sf2000_sdio_write_active = true;
             sf2000_sdio_pio_state = 0x04;
         } else if (value & 0x20) {
+            if (sf2000_sdio_strict_native() &&
+                sf2000_sdio_reset_contract_window && size == 1 &&
+                value == 0x20) {
+                sf2000_sdio_reset_dma_contract_violation = true;
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "sf2000: SDIO native contract violation: "
+                              "DMA control 0x20 written during reset window\n");
+            }
             sf2000_sdio_dma_control = value & 0x21;
             sf2000_sdio_dma_word_start = false;
             sf2000_sdio_xfer_done = false;
