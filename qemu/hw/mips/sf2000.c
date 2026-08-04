@@ -1997,6 +1997,7 @@ static bool sf2000_last_progress_valid;
 static uint32_t sf2000_last_unifrog_trace_count;
 static bool sf2000_last_unifrog_trace_valid;
 static bool sf2000_audio_setup_logged;
+static bool sf2000_handoff_flush_logged;
 
 typedef struct SF2000KeyMap {
     QKeyCode qcode;
@@ -2075,6 +2076,9 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
 #define SF2000_PROGRESS_VERSION   1U
 #define SF2000_PROGRESS_ENTRIES   1024U
 #define SF2000_PROGRESS_NAME_LEN   32U
+#define SF2000_HANDOFF_DIAG_PHYS   0x07a10000ULL
+#define SF2000_HANDOFF_BEGIN       0x42544844U
+#define SF2000_HANDOFF_ROM_FLUSH   0x52464c55U
 
 typedef struct SF2000ProgressEntry {
     uint32_t seq;
@@ -2181,6 +2185,13 @@ static void sf2000_trace_fw_call(uint32_t pc, MIPSCPU *cpu)
     }
 
     switch (pc) {
+    case 0x810032f4: /* vendor cache_flush(address, length) */
+        fprintf(stderr,
+                "sf2000: cache_flush addr=0x%08x len=%u gp=0x%08x ra=0x%08x\n",
+                a0, a1, (uint32_t)cpu->env.active_tc.gpr[28],
+                (uint32_t)cpu->env.active_tc.gpr[31]);
+        sf2000_last_call_pc = pc;
+        break;
     case 0x802ad1d8: /* fopen(path, mode) */
         sf2000_guest_read_string(a0, arg0, sizeof(arg0));
         sf2000_guest_read_string(a1, arg1, sizeof(arg1));
@@ -2463,6 +2474,64 @@ static void sf2000_trace_unifrog_log(void)
     }
     sf2000_last_unifrog_trace_count = i;
     sf2000_last_unifrog_trace_valid = true;
+}
+
+static void sf2000_trace_boot_handoff(void)
+{
+    MemTxResult res;
+    uint32_t begin;
+    uint32_t flushed;
+    uint32_t destination_entry[2];
+    uint32_t source_entry[2];
+
+    begin = address_space_ldl_le(&address_space_memory,
+                                 SF2000_HANDOFF_DIAG_PHYS + 0x40,
+                                 MEMTXATTRS_UNSPECIFIED, &res);
+    if (res != MEMTX_OK || begin != SF2000_HANDOFF_BEGIN) {
+        return;
+    }
+    flushed = address_space_ldl_le(&address_space_memory,
+                                   SF2000_HANDOFF_DIAG_PHYS + 0x6c,
+                                   MEMTXATTRS_UNSPECIFIED, &res);
+    if (res != MEMTX_OK || flushed != SF2000_HANDOFF_ROM_FLUSH) {
+        sf2000_handoff_flush_logged = false;
+        return;
+    }
+    if (sf2000_handoff_flush_logged) {
+        return;
+    }
+
+    destination_entry[0] = address_space_ldl_le(
+        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x5c,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    destination_entry[1] = address_space_ldl_le(
+        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x60,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    source_entry[0] = address_space_ldl_le(
+        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x64,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    source_entry[1] = address_space_ldl_le(
+        &address_space_memory, SF2000_HANDOFF_DIAG_PHYS + 0x68,
+        MEMTXATTRS_UNSPECIFIED, &res);
+
+    if (memcmp(destination_entry, source_entry,
+               sizeof(destination_entry)) != 0) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: boot handoff entry mismatch dst=%08x/%08x src=%08x/%08x\n",
+                      destination_entry[0], destination_entry[1],
+                      source_entry[0], source_entry[1]);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: boot handoff ROM cache flush returned entry=%08x/%08x\n",
+                  destination_entry[0], destination_entry[1]);
+    if (sf2000_trace_pc_enabled()) {
+        fprintf(stderr,
+                "sf2000: boot handoff ROM cache flush returned entry=%08x/%08x\n",
+                destination_entry[0], destination_entry[1]);
+    }
+    sf2000_handoff_flush_logged = true;
 }
 
 static uint32_t sf2000_timer_ticks(void)
@@ -3559,6 +3628,7 @@ static void sf2000_irq_poll_timer_cb(void *opaque)
     }
     sf2000_trace_progress_log();
     sf2000_trace_unifrog_log();
+    sf2000_trace_boot_handoff();
     if (sf2000_patch_security_enabled()) {
         sf2000_patch_stock_security_check();
     }
