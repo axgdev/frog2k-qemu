@@ -5995,6 +5995,12 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_app_cmd = false;
     }
 
+    /* Starting a command sets bit 0 in CMDCTL, but the HC15xx clears it when
+     * the command engine reaches its terminal state.  Native NuttX uses this
+     * bit for the no-response command path, and leaving it set makes the
+     * model diverge from the hardware after a successful command. */
+    sf2000_sdio_cmd_control &= ~1u;
+
     /* Bit 6 is the HC15xx command/data completion indication. */
     sf2000_sdio_xfer_done = true;
     sf2000_sdio_xfer_busy = false;
@@ -6965,6 +6971,13 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
                 (sf2000_audio_dma_producer >> 4);
     } else if (full_addr == SF2000_AUDIO_I2S_BASE + 0x3a) {
         value = sf2000_audio_dma_consumer >> 4;
+    } else if (full_addr == 0x1884c000) {
+        /* CMDCTL is readable on the real host.  In particular, the start
+         * bit is observable as cleared after command completion. */
+        value = sf2000_sdio_cmd_control;
+        if (size < 4) {
+            value &= (1u << (size * 8)) - 1u;
+        }
     } else if (full_addr >= 0x1884c010 && full_addr < 0x1884c020) {
         unsigned off = full_addr - 0x1884c010;
         value = sf2000_sdio_resp[off >> 2] >> ((off & 3) * 8);
@@ -7507,8 +7520,8 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
     } else if (full_addr == 0x1884c02c) {
         sf2000_sdio_dma_wr_len = value;
     } else if (full_addr == 0x1884c030) {
-        sf2000_sdio_dma_control = value & 0x21;
         if (value & 0x40) {
+            sf2000_sdio_dma_control = value & 0x21;
             sf2000_sdio_dma_word_start = false;
             sf2000_sdio_xfer_done = false;
             sf2000_sdio_xfer_busy = false;
@@ -7518,12 +7531,23 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             sf2000_sdio_pio_state |= 0x01;
             sf2000_sdio_pio_state &= ~0x01;
         } else if (value & 1) {
-            sf2000_sdio_dma_word_start = size == 4;
+            /* The Linux/vendor host writes a 32-bit value of 1 to start a
+             * read.  That operation does not replace the previously enabled
+             * DMA bit; on HC15xx it produces the effective control value
+             * 0x21.  Keep the older byte 0x20 -> 0x21 sequence intact. */
+            if (size == 4) {
+                sf2000_sdio_dma_control = 0x21;
+                sf2000_sdio_dma_word_start = true;
+            } else {
+                sf2000_sdio_dma_control = value & 0x21;
+                sf2000_sdio_dma_word_start = false;
+            }
             sf2000_sdio_xfer_done = false;
             sf2000_sdio_xfer_busy = true;
             sf2000_sdio_write_active = true;
             sf2000_sdio_pio_state = 0x04;
         } else if (value & 0x20) {
+            sf2000_sdio_dma_control = value & 0x21;
             sf2000_sdio_dma_word_start = false;
             sf2000_sdio_xfer_done = false;
             sf2000_sdio_xfer_busy = false;
