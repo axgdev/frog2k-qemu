@@ -2155,6 +2155,15 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
 #define SF2000_HANDOFF_ICACHE_OK    0x49434f4bU
 #define SF2000_HANDOFF_TARGET_ENTRY 0x4c494e58U
 #define SF2000_HANDOFF_EXCEPTION    0x45584350U
+#define SF2000_HANDOFF_MODE_GENERIC 0U
+#define SF2000_HANDOFF_MODE_STOCK   1U
+#define SF2000_HANDOFF_STOCK_ENTRY  0x40088000U
+#define SF2000_RETAINED_RAW_PHYS    0x06810000ULL
+#define SF2000_IMAGE_DIAG_MAGIC     0x494d4744U
+#define SF2000_IMAGE_DIAG_CURRENT   20U
+#define SF2000_IMAGE_MODE_ASD       1U
+#define SF2000_IMAGE_MODE_BIN       2U
+#define SF2000_IMAGE_PHASE_HANDOFF  12U
 #define SF2000_BOOT_STAGE_PHYS     0x07000000ULL
 #define SF2000_BOOT_STAGE_ADDR     0x87000000U
 #define SF2000_BOOT_STAGE_END      0x07fe0000ULL
@@ -2614,6 +2623,12 @@ static void sf2000_trace_boot_handoff(void)
     uint32_t dcache_ok;
     uint32_t icache_begin;
     uint32_t icache_ok;
+    uint32_t handoff_mode;
+    uint32_t handoff_state;
+    uint32_t image_magic;
+    uint32_t image_attempt;
+    uint32_t image_mode;
+    uint32_t image_phase;
     uint32_t target_entry;
     uint32_t exception_marker;
     uint32_t exception_cause;
@@ -2739,6 +2754,51 @@ static void sf2000_trace_boot_handoff(void)
     icache_ok = address_space_ldl_le(
         &address_space_memory, diag + 0x84,
         MEMTXATTRS_UNSPECIFIED, &res);
+    handoff_mode = address_space_ldl_le(
+        &address_space_memory, diag + 0xd8,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    handoff_state = address_space_ldl_le(
+        &address_space_memory, diag + 0xe8,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    image_magic = address_space_ldl_le(
+        &address_space_memory,
+        SF2000_RETAINED_RAW_PHYS + SF2000_IMAGE_DIAG_CURRENT * 4ULL,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    image_attempt = address_space_ldl_le(
+        &address_space_memory,
+        SF2000_RETAINED_RAW_PHYS + (SF2000_IMAGE_DIAG_CURRENT + 1U) * 4ULL,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    image_mode = address_space_ldl_le(
+        &address_space_memory,
+        SF2000_RETAINED_RAW_PHYS + (SF2000_IMAGE_DIAG_CURRENT + 3U) * 4ULL,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    image_phase = address_space_ldl_le(
+        &address_space_memory,
+        SF2000_RETAINED_RAW_PHYS + (SF2000_IMAGE_DIAG_CURRENT + 4U) * 4ULL,
+        MEMTXATTRS_UNSPECIFIED, &res);
+
+    if (diag == SF2000_HANDOFF_DIAG_PHYS &&
+        (image_magic != SF2000_IMAGE_DIAG_MAGIC ||
+         image_phase != SF2000_IMAGE_PHASE_HANDOFF ||
+         (image_mode != SF2000_IMAGE_MODE_ASD &&
+          image_mode != SF2000_IMAGE_MODE_BIN))) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: image diagnostic did not reach handoff"
+                      " magic=%08x attempt=%u mode=%u phase=%u"
+                      " handoff_mode=%u\n",
+                      image_magic, image_attempt, image_mode, image_phase,
+                      handoff_mode);
+        return;
+    }
+
+    if (diag == SF2000_HANDOFF_DIAG_PHYS &&
+        handoff_mode != SF2000_HANDOFF_MODE_GENERIC &&
+        handoff_mode != SF2000_HANDOFF_MODE_STOCK) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: boot handoff mode invalid mode=0x%08x\n",
+                      handoff_mode);
+        return;
+    }
 
     if (diag == SF2000_HANDOFF_DIAG_PHYS &&
         (res != MEMTX_OK || vendor_state != SF2000_HANDOFF_VENDOR_RESTORED)) {
@@ -2777,12 +2837,32 @@ static void sf2000_trace_boot_handoff(void)
         return;
     }
 
+    if (diag == SF2000_HANDOFF_DIAG_PHYS &&
+        ((handoff_mode == SF2000_HANDOFF_MODE_STOCK &&
+          image_mode != SF2000_IMAGE_MODE_ASD) ||
+         (handoff_mode == SF2000_HANDOFF_MODE_STOCK &&
+          destination_entry[0] != SF2000_HANDOFF_STOCK_ENTRY) ||
+         (handoff_mode == SF2000_HANDOFF_MODE_GENERIC &&
+          destination_entry[0] == SF2000_HANDOFF_STOCK_ENTRY))) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: boot handoff mode/entry mismatch"
+                      " mode=%u entry=%08x\n",
+                      handoff_mode, destination_entry[0]);
+        return;
+    }
+
     qemu_log_mask(LOG_UNIMP,
                   "sf2000: boot handoff ROM cache flush returned"
                   " payload=%u entry=%08x/%08x vendor_state=%s"
-                  " dcache=clean icache=clean\n",
+                  " dcache=clean icache=clean mode=%s state=%08x\n",
                   payload_size, destination_entry[0], destination_entry[1],
-                  diag == SF2000_HANDOFF_DIAG_PHYS ? "restored" : "legacy");
+                  diag == SF2000_HANDOFF_DIAG_PHYS ? "restored" : "legacy",
+                  diag == SF2000_HANDOFF_DIAG_PHYS &&
+                  handoff_mode == SF2000_HANDOFF_MODE_STOCK ? "stock" :
+                  "generic", handoff_state);
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: image diagnostic attempt=%u mode=%u phase=%u\n",
+                  image_attempt, image_mode, image_phase);
     if (sf2000_trace_pc_enabled()) {
         fprintf(stderr,
                 "sf2000: boot handoff ROM cache flush returned"
