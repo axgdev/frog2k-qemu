@@ -2063,7 +2063,7 @@ static uint32_t sf2000_last_unifrog_trace_count;
 static bool sf2000_last_unifrog_trace_valid;
 static bool sf2000_audio_setup_logged;
 static bool sf2000_handoff_flush_logged;
-static bool sf2000_handoff_target_logged;
+static bool sf2000_handoff_asm_logged;
 static bool sf2000_handoff_exception_logged;
 static uint32_t sf2000_handoff_trace_mask;
 
@@ -2154,7 +2154,8 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
 #define SF2000_HANDOFF_DCACHE_OK    0x44434f4bU
 #define SF2000_HANDOFF_ICACHE_BEGIN 0x49434247U
 #define SF2000_HANDOFF_ICACHE_OK    0x49434f4bU
-#define SF2000_HANDOFF_TARGET_ENTRY 0x4c494e58U
+#define SF2000_HANDOFF_ASM_ENTRY  0x4c494e58U
+#define SF2000_HANDOFF_ASM_CALL   0x4c4a414cU
 #define SF2000_HANDOFF_EXCEPTION    0x45584350U
 #define SF2000_HANDOFF_MODE_GENERIC 0U
 #define SF2000_HANDOFF_MODE_STOCK   1U
@@ -2620,6 +2621,7 @@ static void sf2000_trace_linux_handoff_stages(hwaddr diag)
         { 0x108U, 0x4c4d4150U, "mapping-ready" },
         { 0x110U, 0x4c4a4d50U, "kernel-jump" },
         { 0x118U, 0x4c445442U, "DTB-ready" },
+        { 0x0d0U, 0x4c4a414cU, "C-call" },
     };
     unsigned int i;
 
@@ -2697,16 +2699,26 @@ static void sf2000_trace_boot_handoff(void)
         target_entry = address_space_ldl_le(&address_space_memory,
                                             diag + 0xc0,
                                             MEMTXATTRS_UNSPECIFIED, &res);
-        if (res == MEMTX_OK && target_entry == SF2000_HANDOFF_TARGET_ENTRY &&
-            !sf2000_handoff_target_logged) {
+        if (res == MEMTX_OK && target_entry == SF2000_HANDOFF_ASM_ENTRY &&
+            !sf2000_handoff_asm_logged) {
             uint32_t target_status = address_space_ldl_le(
                 &address_space_memory, diag + 0xc4,
                 MEMTXATTRS_UNSPECIFIED, &res);
+            uint32_t call_marker = address_space_ldl_le(
+                &address_space_memory, diag + 0xd0,
+                MEMTXATTRS_UNSPECIFIED, &res);
+            uint32_t call_status = address_space_ldl_le(
+                &address_space_memory, diag + 0xd4,
+                MEMTXATTRS_UNSPECIFIED, &res);
             qemu_log_mask(LOG_UNIMP,
-                          "sf2000: boot handoff target entry reached"
-                          " marker=LINX status=0x%08x\n",
-                          target_status);
-            sf2000_handoff_target_logged = true;
+                          "sf2000: boot handoff entry assembly reached"
+                          " marker=LINX status=0x%08x c-call=%s"
+                          " c-status=0x%08x\n",
+                          target_status,
+                          call_marker == SF2000_HANDOFF_ASM_CALL ? "LJAL" :
+                          "missing",
+                          call_status);
+            sf2000_handoff_asm_logged = true;
         }
         exception_marker = address_space_ldl_le(
             &address_space_memory, diag + 0xa4,
@@ -9342,7 +9354,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_ge_submit_sequence = 0;
     sf2000_ge_irq_ack_sequence = 0;
     sf2000_handoff_flush_logged = false;
-    sf2000_handoff_target_logged = false;
+    sf2000_handoff_asm_logged = false;
     sf2000_handoff_exception_logged = false;
     sf2000_handoff_trace_mask = 0;
 
