@@ -2063,6 +2063,8 @@ static uint32_t sf2000_last_unifrog_trace_count;
 static bool sf2000_last_unifrog_trace_valid;
 static bool sf2000_audio_setup_logged;
 static bool sf2000_handoff_flush_logged;
+static bool sf2000_handoff_target_logged;
+static bool sf2000_handoff_exception_logged;
 
 typedef struct SF2000KeyMap {
     QKeyCode qcode;
@@ -2149,6 +2151,8 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
 #define SF2000_HANDOFF_VENDOR_RESTORED 0x56414249U
 #define SF2000_HANDOFF_ICACHE_BEGIN 0x49434247U
 #define SF2000_HANDOFF_ICACHE_OK    0x49434f4bU
+#define SF2000_HANDOFF_TARGET_ENTRY 0x4c494e58U
+#define SF2000_HANDOFF_EXCEPTION    0x45584350U
 #define SF2000_BOOT_STAGE_PHYS     0x07000000ULL
 #define SF2000_BOOT_STAGE_ADDR     0x87000000U
 #define SF2000_BOOT_STAGE_END      0x07fe0000ULL
@@ -2606,6 +2610,10 @@ static void sf2000_trace_boot_handoff(void)
     uint32_t vendor_state;
     uint32_t icache_begin;
     uint32_t icache_ok;
+    uint32_t target_entry;
+    uint32_t exception_marker;
+    uint32_t exception_cause;
+    uint32_t exception_epc;
     hwaddr source_phys;
     hwaddr destination_phys;
     hwaddr handoff_phys;
@@ -2622,6 +2630,37 @@ static void sf2000_trace_boot_handoff(void)
         return;
     }
     if (sf2000_handoff_flush_logged) {
+        target_entry = address_space_ldl_le(&address_space_memory,
+                                            diag + 0xc0,
+                                            MEMTXATTRS_UNSPECIFIED, &res);
+        if (res == MEMTX_OK && target_entry == SF2000_HANDOFF_TARGET_ENTRY &&
+            !sf2000_handoff_target_logged) {
+            uint32_t target_status = address_space_ldl_le(
+                &address_space_memory, diag + 0xc4,
+                MEMTXATTRS_UNSPECIFIED, &res);
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: boot handoff target entry reached"
+                          " marker=LINX status=0x%08x\n",
+                          target_status);
+            sf2000_handoff_target_logged = true;
+        }
+        exception_marker = address_space_ldl_le(
+            &address_space_memory, diag + 0xa4,
+            MEMTXATTRS_UNSPECIFIED, &res);
+        if (res == MEMTX_OK && exception_marker == SF2000_HANDOFF_EXCEPTION &&
+            !sf2000_handoff_exception_logged) {
+            exception_cause = address_space_ldl_le(
+                &address_space_memory, diag + 0xa8,
+                MEMTXATTRS_UNSPECIFIED, &res);
+            exception_epc = address_space_ldl_le(
+                &address_space_memory, diag + 0xac,
+                MEMTXATTRS_UNSPECIFIED, &res);
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: boot handoff target exception"
+                          " cause=0x%08x epc=0x%08x\n",
+                          exception_cause, exception_epc);
+            sf2000_handoff_exception_logged = true;
+        }
         return;
     }
 
@@ -9157,6 +9196,9 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_ge_hw_reset();
     sf2000_ge_submit_sequence = 0;
     sf2000_ge_irq_ack_sequence = 0;
+    sf2000_handoff_flush_logged = false;
+    sf2000_handoff_target_logged = false;
+    sf2000_handoff_exception_logged = false;
 
     sf2000_sdio_arg = 0;
     sf2000_sdio_cmd = 0;
