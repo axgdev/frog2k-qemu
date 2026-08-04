@@ -1941,11 +1941,31 @@ static uint8_t sf2000_sdio_terminal_status(void)
     /* e8 is a physical terminal value seen after successful no-data
      * commands.  Keep e4 as the default for existing stock-firmware traces,
      * while allowing the native-driver smoke to exercise the raw decoder. */
-    if (sf2000_sdio_native_guest() && setting &&
-        (!strcmp(setting, "e8") || !strcmp(setting, "0xe8"))) {
-        return 0xe8;
+    if (sf2000_sdio_native_guest() && setting) {
+        if (!strcmp(setting, "e8") || !strcmp(setting, "0xe8")) {
+            return 0xe8;
+        }
+        if ((!strcmp(setting, "e6") || !strcmp(setting, "0xe6")) &&
+            (sf2000_sdio_cmd_control & 0x08)) {
+            return 0xe6;
+        }
     }
     return 0xe4;
+}
+
+static uint8_t sf2000_sdio_terminal_irq(void)
+{
+    const char *setting = g_getenv("SF2000_SDIO_TERMINAL_IRQ");
+
+    /* logn061 observed 0x44 for a completed physical CMD17.  The older QEMU
+     * model used 0x6c, which has the same terminal bit but hid assumptions
+     * about the phase-specific low bits. */
+    if (sf2000_sdio_native_guest() && setting &&
+        (!strcmp(setting, "44") || !strcmp(setting, "0x44")) &&
+        (sf2000_sdio_cmd_control & 0x08)) {
+        return 0x44;
+    }
+    return 0x6c;
 }
 
 static bool sf2000_sdio_should_stall_once(uint32_t lba)
@@ -7173,7 +7193,7 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
     } else if (full_addr == 0x1884c00b) {
         value = sf2000_sdio_xfer_done ? 0x0c : 0x09;
     } else if (full_addr == 0x1884c030) {
-        value = sf2000_sdio_xfer_done ? 0x6c :
+        value = sf2000_sdio_xfer_done ? sf2000_sdio_terminal_irq() :
                 (sf2000_sdio_xfer_busy ? 0x21 : 0x20);
     } else if (sf2000_ge_decode(full_addr)) {
         uint32_t ge_value;
