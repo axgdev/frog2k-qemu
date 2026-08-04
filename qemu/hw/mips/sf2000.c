@@ -1902,6 +1902,7 @@ static bool sf2000_sdio_irq_pending;
 static bool sf2000_sdio_callback_pending;
 static bool sf2000_sdio_app_cmd;
 static uint8_t sf2000_sdio_bus_width;
+static unsigned int sf2000_sdio_malformed_ocr_probes;
 static uint8_t sf2000_sdio_dma_control;
 static uint8_t sf2000_sdio_cmd_control;
 static bool sf2000_sdio_dma_word_start;
@@ -6076,7 +6077,20 @@ static void sf2000_sdio_complete_cmd(void)
          * support because the goal is testing SF2000 firmware behavior rather
          * than SD-card electrical negotiation.
          */
-        sf2000_sdio_set_short_response(0xc0ff8000);
+        /* In the malformed-CMD8 fault mode, mirror the physical sequence
+         * from logn060: an initial legacy OCR probe is busy, then advertises
+         * HCS while still busy.  The guest must retry with the HCS argument. */
+        if (sf2000_sdio_cmd8_malformed_response() &&
+            sf2000_sdio_arg == 0) {
+            sf2000_sdio_malformed_ocr_probes++;
+            if (sf2000_sdio_malformed_ocr_probes == 1) {
+                sf2000_sdio_set_short_response(0x00000120);
+            } else {
+                sf2000_sdio_set_short_response(0x40ff8000);
+            }
+        } else {
+            sf2000_sdio_set_short_response(0xc0ff8000);
+        }
         break;
     case 51:
         if (is_app_cmd) {
@@ -9038,6 +9052,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_callback_pending = false;
     sf2000_sdio_app_cmd = false;
     sf2000_sdio_bus_width = 1;
+    sf2000_sdio_malformed_ocr_probes = 0;
     sf2000_sdio_dma_control = 0x20;
     sf2000_sdio_cmd_control = 0;
     sf2000_sdio_dma_word_start = false;
