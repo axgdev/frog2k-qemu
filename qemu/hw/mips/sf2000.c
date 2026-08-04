@@ -5020,6 +5020,7 @@ static void sf2000_ge_start_queue(void)
     uint32_t first = 0;
     uint32_t last = 0;
     uint32_t start = 0;
+    uint32_t clock = 0;
     uint32_t clock_gate = 0;
     uint32_t context[7] = { 0 };
 
@@ -5027,11 +5028,18 @@ static void sf2000_ge_start_queue(void)
     sf2000_mmio_get32(SF2000_GE_HQ_FIRST, &first);
     sf2000_mmio_get32(SF2000_GE_HQ_LAST, &last);
     sf2000_mmio_get32(SF2000_GE_START, &start);
+    sf2000_mmio_get32(0x1880007c, &clock);
     if (sf2000_mmio_get32(0x18800064, &clock_gate) &&
         (clock_gate & BIT(4)) != 0u) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "sf2000: GE doorbell while GE clock is gated gate1=%08x\n",
                       clock_gate);
+        return;
+    }
+    if ((clock & (3u << 18)) != (3u << 18)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: GE invalid clock selector sfclk=%08x\n",
+                      clock);
         return;
     }
     if (!sf2000_ge_queue_min || first < sf2000_ge_queue_min) {
