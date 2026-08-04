@@ -5886,13 +5886,13 @@ static bool sf2000_sdio_cmd8_legacy_response(void)
            (!strcmp(setting, "1") || !strcmp(setting, "yes"));
 }
 
-static void sf2000_sdio_validate_native_command_control(void)
+static bool sf2000_sdio_validate_native_command_control(void)
 {
     uint8_t expected;
     uint8_t actual;
 
     if (!sf2000_sdio_strict_native()) {
-        return;
+        return true;
     }
 
     switch (sf2000_sdio_cmd) {
@@ -5900,12 +5900,24 @@ static void sf2000_sdio_validate_native_command_control(void)
         expected = 0x04;
         break;
     case 2:
-    case 9:
-        expected = 0x20;
+        /* MMC_ALL_SEND_CID is a broadcast command with an R2 response. */
+        expected = 0x22;
         break;
     case 3:
     case 8:
-        expected = 0x40;
+        /* CMD3/CMD8 are BCR commands with the HC15xx R6/R7 encoding. */
+        expected = 0x42;
+        break;
+    case 9:
+        expected = 0x20;
+        break;
+    case 41:
+        /* ACMD41 is BCR plus MMC_RSP_R3: 0x02 | 0x30. */
+        expected = 0x32;
+        break;
+    case 55:
+        /* The probe CMD55 is BCR; card-addressed APP_CMD is AC. */
+        expected = sf2000_sdio_arg == 0 ? 0x12 : 0x10;
         break;
     case 17:
     case 18:
@@ -5915,10 +5927,6 @@ static void sf2000_sdio_validate_native_command_control(void)
     case 24:
     case 25:
         expected = 0x1a;
-        break;
-    case 41:
-        /* R3 is MMC_RSP_PRESENT and therefore uses 0x30. */
-        expected = 0x30;
         break;
     default:
         expected = 0x10;
@@ -5931,7 +5939,9 @@ static void sf2000_sdio_validate_native_command_control(void)
                       "sf2000: SDIO native command contract mismatch: "
                       "cmd=%u actual=0x%02x expected=0x%02x\n",
                       sf2000_sdio_cmd, actual, expected);
+        return false;
     }
+    return true;
 }
 
 static void sf2000_sdio_dma_read_scr(void)
@@ -5978,7 +5988,16 @@ static void sf2000_sdio_complete_cmd(void)
         return;
     }
     sf2000_sdio_reset_contract_window = false;
-    sf2000_sdio_validate_native_command_control();
+    if (!sf2000_sdio_validate_native_command_control()) {
+        sf2000_sdio_contract_command_failed = true;
+        sf2000_sdio_xfer_done = false;
+        sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_irq_pending = false;
+        sf2000_sdio_callback_pending = false;
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: SDIO native command blocked after contract mismatch\n");
+        return;
+    }
 
     sf2000_sdio_resp[0] = 0;
     sf2000_sdio_resp[1] = 0;
