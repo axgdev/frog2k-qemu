@@ -5878,6 +5878,62 @@ static void sf2000_sdio_set_short_response(uint32_t response)
     sf2000_sdio_resp[1] = response >> 24;
 }
 
+static bool sf2000_sdio_cmd8_legacy_response(void)
+{
+    const char *setting = g_getenv("SF2000_SDIO_CMD8_LEGACY");
+
+    return sf2000_sdio_native_guest() && setting &&
+           (!strcmp(setting, "1") || !strcmp(setting, "yes"));
+}
+
+static void sf2000_sdio_validate_native_command_control(void)
+{
+    uint8_t expected;
+    uint8_t actual;
+
+    if (!sf2000_sdio_strict_native()) {
+        return;
+    }
+
+    switch (sf2000_sdio_cmd) {
+    case 0:
+        expected = 0x04;
+        break;
+    case 2:
+    case 9:
+        expected = 0x20;
+        break;
+    case 3:
+    case 8:
+        expected = 0x40;
+        break;
+    case 17:
+    case 18:
+    case 51:
+        expected = 0x18;
+        break;
+    case 24:
+    case 25:
+        expected = 0x1a;
+        break;
+    case 41:
+        /* R3 is MMC_RSP_PRESENT and therefore uses 0x30. */
+        expected = 0x30;
+        break;
+    default:
+        expected = 0x10;
+        break;
+    }
+
+    actual = sf2000_sdio_cmd_control & (uint8_t)~1u;
+    if (actual != expected) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: SDIO native command contract mismatch: "
+                      "cmd=%u actual=0x%02x expected=0x%02x\n",
+                      sf2000_sdio_cmd, actual, expected);
+    }
+}
+
 static void sf2000_sdio_dma_read_scr(void)
 {
     static const uint8_t scr[8] = {
@@ -5922,6 +5978,7 @@ static void sf2000_sdio_complete_cmd(void)
         return;
     }
     sf2000_sdio_reset_contract_window = false;
+    sf2000_sdio_validate_native_command_control();
 
     sf2000_sdio_resp[0] = 0;
     sf2000_sdio_resp[1] = 0;
@@ -5958,7 +6015,15 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_set_short_response(0x00010000); /* R6: RCA 1. */
         break;
     case 8:
-        sf2000_sdio_set_short_response(0x000001aa);
+        if (sf2000_sdio_cmd8_legacy_response()) {
+            /* SD v1.x cards complete CMD8 with R1/illegal-command rather
+             * than the R7 0x1aa pattern. */
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: SDIO native CMD8 legacy response\n");
+            sf2000_sdio_set_short_response(0x00400000);
+        } else {
+            sf2000_sdio_set_short_response(0x000001aa);
+        }
         break;
     case 9:
         sf2000_sdio_resp[0] = 0x0009003f;
