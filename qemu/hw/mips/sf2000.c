@@ -5020,6 +5020,7 @@ static void sf2000_ge_start_queue(void)
     uint32_t first = 0;
     uint32_t last = 0;
     uint32_t clock_gate = 0;
+    uint32_t context[7] = { 0 };
 
     sf2000_mmio_get32(SF2000_GE_STATUS, &status);
     sf2000_mmio_get32(SF2000_GE_HQ_FIRST, &first);
@@ -5039,6 +5040,29 @@ static void sf2000_ge_start_queue(void)
                       "sf2000: GE doorbell while command queue busy\n");
         return;
     }
+    /* HC15xx uses the context immediately preceding the command arena as
+     * the producer state.  The Linux/vendor driver updates phy_addr_start
+     * before ringing the queue.  Accept legacy firmware that does not expose
+     * this context, but model a recognized context strictly so NuttX tests
+     * cannot pass with HQ_LAST and the producer disagreeing. */
+    if (first >= (8u + 256u) * sizeof(uint32_t) &&
+        sf2000_ge_read_node(first - (8u + 256u) * sizeof(uint32_t),
+                            context, ARRAY_SIZE(context)) &&
+        context[0] == (sf2000_ge_queue_min ? sf2000_ge_queue_min : first) &&
+        context[1] > context[0]) {
+        uint32_t producer = context[6] & ~1u;
+
+        if (context[2] != 0u || producer <= last ||
+            producer > context[1]) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "sf2000: GE invalid producer context "
+                          "first=0x%08x last=0x%08x finish=%u "
+                          "producer=0x%08x min=0x%08x max=0x%08x\n",
+                          first, last, context[2], producer,
+                          context[0], context[1]);
+            return;
+        }
+    }
     status &= ~SF2000_GE_STATUS_DONE;
     status |= SF2000_GE_STATUS_BUSY;
     sf2000_mmio_set32(SF2000_GE_STATUS, status);
@@ -5047,8 +5071,6 @@ static void sf2000_ge_start_queue(void)
     if (sf2000_scanout_oracle() &&
         (sf2000_ge_submit_sequence <= 8 ||
          !(sf2000_ge_submit_sequence % 300))) {
-        uint32_t context[7] = { 0 };
-
         if (sf2000_ge_queue_min >= (8 + 256) * sizeof(uint32_t)) {
             sf2000_ge_read_node(sf2000_ge_queue_min -
                                 (8 + 256) * sizeof(uint32_t),
