@@ -2621,6 +2621,8 @@ static void sf2000_trace_linux_handoff_stages(hwaddr diag)
         { 0x108U, 0x4c4d4150U, "mapping-ready" },
         { 0x110U, 0x4c4a4d50U, "kernel-jump" },
         { 0x118U, 0x4c445442U, "DTB-ready" },
+        { 0x120U, 0x4c575250U, "C-wrapper" },
+        { 0x128U, 0x4c574346U, "C-cache" },
         { 0x0d0U, 0x4c4a414cU, "C-call" },
     };
     unsigned int i;
