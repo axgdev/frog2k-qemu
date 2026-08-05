@@ -1909,6 +1909,7 @@ static uint8_t sf2000_sdio_dma_control;
 static uint8_t sf2000_sdio_cmd_control;
 static bool sf2000_sdio_dma_word_start;
 static bool sf2000_sdio_stall_once_consumed;
+static uint8_t sf2000_sdio_corrupt_sector_mask;
 static bool sf2000_sdio_reset_dma_contract_violation;
 static bool sf2000_sdio_contract_command_failed;
 static bool sf2000_sdio_reset_contract_window;
@@ -1995,6 +1996,47 @@ static bool sf2000_sdio_should_stall_once(uint32_t lba)
     }
     sf2000_sdio_stall_once_consumed = true;
     return true;
+}
+
+static bool sf2000_sdio_should_corrupt_sector_once(uint32_t lba)
+{
+    const char *settings[2] = {
+        g_getenv("SF2000_SDIO_CORRUPT_SECTOR_LBA"),
+        g_getenv("SF2000_SDIO_CORRUPT_SECTOR_ALT_LBA"),
+    };
+    uint8_t bits[2] = { 1u, 2u };
+    unsigned int i;
+    uint32_t pc;
+
+    if (!current_cpu || sf2000_sdio_corrupt_sector_mask == 3u) {
+        return false;
+    }
+    pc = (uint32_t)MIPS_CPU(current_cpu)->env.active_tc.PC;
+    /* Match the timeout injection: this fault is for the replacement
+     * native reader, not for the stock firmware's own filesystem probe. */
+    if (pc >= 0x81000000u) {
+        return false;
+    }
+    for (i = 0; i < 2u; i++) {
+        char *end = NULL;
+        uint64_t requested;
+
+        if (!settings[i] || !settings[i][0] ||
+            (sf2000_sdio_corrupt_sector_mask & bits[i]) != 0u) {
+            continue;
+        }
+        requested = g_ascii_strtoull(settings[i], &end, 0);
+        if (!end || *end || requested > UINT32_MAX ||
+            requested != lba) {
+            continue;
+        }
+        sf2000_sdio_corrupt_sector_mask |= bits[i];
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: sdio injected FAT sector corruption lba=%u pass=%u\n",
+                      lba, i + 1u);
+        return true;
+    }
+    return false;
 }
 
 static void sf2000_sdio_ip_reset(void)
@@ -5989,6 +6031,7 @@ static bool sf2000_sdio_dma_read_image_bulk(uint32_t lba, uint32_t len,
 static void sf2000_sdio_dma_read(uint32_t lba)
 {
     uint8_t sector[512];
+    uint8_t blank_sector[512];
     MemTxResult result = MEMTX_OK;
     uint32_t len = sf2000_sdio_dma_len ? sf2000_sdio_dma_len : 512;
     uint32_t copied = 0;
@@ -5998,6 +6041,14 @@ static void sf2000_sdio_dma_read(uint32_t lba)
 
     if (sf2000_sdio_dma_read_image_bulk(lba, len, &copied, &result)) {
         image_backed = true;
+        if (len == sizeof(blank_sector) &&
+            sf2000_sdio_should_corrupt_sector_once(lba)) {
+            memset(blank_sector, 0, sizeof(blank_sector));
+            result = dma_memory_write(&address_space_memory,
+                                      sf2000_sdio_dma_addr,
+                                      blank_sector, sizeof(blank_sector),
+                                      MEMTXATTRS_UNSPECIFIED);
+        }
     } else {
         image_backed = sf2000_sdio_blk != NULL;
     }
@@ -6009,6 +6060,10 @@ static void sf2000_sdio_dma_read(uint32_t lba)
             chunk = sizeof(sector);
         }
         image_backed &= sf2000_sdio_read_sector(lba + i, sector);
+        if (len == sizeof(blank_sector) &&
+            sf2000_sdio_should_corrupt_sector_once(lba + i)) {
+            memset(sector, 0, sizeof(sector));
+        }
         result = dma_memory_write(&address_space_memory,
                                   sf2000_sdio_dma_addr + copied,
                                   sector, chunk, MEMTXATTRS_UNSPECIFIED);
