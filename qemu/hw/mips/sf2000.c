@@ -1882,7 +1882,23 @@ static uint8_t sf2000_bootrom_bytes[SF2000_BOOT_SIZE];
 static QEMUTimer *sf2000_irq_poll_timer;
 static QEMUTimer *sf2000_ge_timer;
 static bool sf2000_ge_irq_pending;
+/* When set via -M sf2000,ge-no-irq=on, the GE completion never asserts the
+ * EIRQ3 line even though the engine still finishes queues and latches
+ * STATUS.DONE.  This reproduces the physical-device condition (the sysint
+ * cascade can deliver 0 IRQs for the graphics-engine line) so the Linux
+ * driver is exercised on its poll path instead of the completion IRQ. */
+static bool sf2000_ge_no_irq;
 static uint64_t sf2000_ge_submit_sequence;
+
+static bool sf2000_machine_ge_no_irq_get(Object *obj, Error **errp)
+{
+    return sf2000_ge_no_irq;
+}
+
+static void sf2000_machine_ge_no_irq_set(Object *obj, bool value, Error **errp)
+{
+    sf2000_ge_no_irq = value;
+}
 static uint64_t sf2000_ge_irq_ack_sequence;
 static uint32_t sf2000_ge_queue_min;
 static MemoryRegion *sf2000_ram_region;
@@ -4043,7 +4059,7 @@ static void sf2000_update_irq(void)
                   sf2000_irq1_enabled(SF2000_IRC_IRQ)) ||
                  (sf2000_audio_irq_pending() &&
                   sf2000_irq1_enabled(SF2000_SND_IRQ)) ||
-                 (sf2000_ge_irq_pending &&
+                 (sf2000_ge_irq_pending && !sf2000_ge_no_irq &&
                   sf2000_irq1_enabled(SF2000_GE_IRQ)) ||
                  (sf2000_sb_timer_pending() && !sf2000_sb_timer_irq_masked) ||
                  (sf2000_sdio_irq_pending &&
@@ -5269,8 +5285,9 @@ static void sf2000_ge_timer_cb(void *opaque)
          !(sf2000_ge_submit_sequence % 300))) {
         qemu_log_mask(LOG_UNIMP,
                       "sf2000: ge-queue complete seq=%" PRIu64
-                      " status=%08x irq=1\n",
-                      sf2000_ge_submit_sequence, status);
+                      " status=%08x irq=%d\n",
+                      sf2000_ge_submit_sequence, status,
+                      !sf2000_ge_no_irq);
     }
     sf2000_update_irq();
 }
@@ -9472,11 +9489,17 @@ static void sf2000_cpu_reset(void *opaque)
     cpu_reset(CPU(cpu));
 
     if (loaderparams.kernel_filename) {
-        /* The physical SF2000 boot ROM selects this EBase and the silicon
-         * ignores later attempts to move it.  Keep the machine model on the
-         * same exception-vector contract so bare-metal guests exercise their
-         * relocated vectors in QEMU too. */
-        env->CP0_EBase = 0x81002000;
+        /* The physical SF2000 boot ROM can leave EBase at either of two
+         * documented values: the ROM-selected 0x81002000 when the ROM call
+         * table at 0x8101f044 is live (Linux adopts it through the
+         * sf2000_normalize_cp0_ebase() handoff path), or 0x80000000 when no
+         * handoff state is present.  QEMU boots the no-handoff
+         * configuration: there is no ROM call table, so the kernel skips
+         * the normalize step and installs its handlers at ebase = CAC_BASE
+         * (general vector 0x80000180).  The CPU must vector where the
+         * kernel puts them, so start EBase at 0x80000000 rather than the
+         * ROM-selected 0x81002000 that a handoff-present device would use. */
+        env->CP0_EBase = 0x80000000;
         env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
         if (loaderparams.linux_elf) {
             env->active_tc.gpr[4] = -2;
@@ -9793,6 +9816,9 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
                                   sf2000_machine_usb_phy3_get, NULL);
     object_class_property_add_str(oc, "storage-reset",
                                   sf2000_machine_storage_reset_get, NULL);
+    object_class_property_add_bool(oc, "ge-no-irq",
+                                   sf2000_machine_ge_no_irq_get,
+                                   sf2000_machine_ge_no_irq_set);
     object_class_property_add_str(oc, "usb0-state",
                                   sf2000_machine_usb0_state_get, NULL);
     object_class_property_add_str(oc, "usb1-state",
