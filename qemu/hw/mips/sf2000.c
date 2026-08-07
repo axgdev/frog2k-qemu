@@ -1898,6 +1898,24 @@ static bool sf2000_ge_irq_pending;
  * cascade can deliver 0 IRQs for the graphics-engine line) so the Linux
  * driver is exercised on its poll path instead of the completion IRQ. */
 static bool sf2000_ge_no_irq;
+/* One-shot completed-but-wrong destination fault for the Linux regression
+ * smoke.  The queue still completes normally; only the next optimized RGB565
+ * blit skips its destination write, reproducing the physical fourth-job
+ * verification failure without perturbing normal QEMU behavior. */
+static bool sf2000_ge_fault_dest;
+static unsigned sf2000_ge_rgb16_blit_count;
+
+static bool sf2000_machine_ge_fault_dest_get(Object *obj, Error **errp)
+{
+    return sf2000_ge_fault_dest;
+}
+
+static void sf2000_machine_ge_fault_dest_set(Object *obj, bool value,
+                                              Error **errp)
+{
+    sf2000_ge_fault_dest = value;
+}
+
 static uint64_t sf2000_ge_submit_sequence;
 
 static bool sf2000_machine_ge_no_irq_get(Object *obj, Error **errp)
@@ -4467,6 +4485,17 @@ static void sf2000_ge_rgb16_blit(uint32_t dst, uint32_t dst_pitch,
     uint32_t row;
 
     if (!dst || !src || !dst_pitch || !src_pitch || !width || !height) {
+        return;
+    }
+    sf2000_ge_rgb16_blit_count++;
+    /* The physical failure is the fourth completed presentation, not the
+     * blank initialization copy.  Keep the fault one-shot and deterministic
+     * so the smoke exercises the same verify-reset branch as run 131. */
+    if (sf2000_ge_fault_dest && sf2000_ge_rgb16_blit_count == 4u) {
+        sf2000_ge_fault_dest = false;
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: ge fault-dest: skipped RGB565 blit %u destination write\\n",
+                      sf2000_ge_rgb16_blit_count);
         return;
     }
     image = g_malloc(line_size * height);
@@ -9873,6 +9902,9 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_bool(oc, "ge-no-irq",
                                    sf2000_machine_ge_no_irq_get,
                                    sf2000_machine_ge_no_irq_set);
+    object_class_property_add_bool(oc, "ge-fault-dest",
+                                   sf2000_machine_ge_fault_dest_get,
+                                   sf2000_machine_ge_fault_dest_set);
     object_class_property_add_bool(oc, "stale-ram",
                                    sf2000_machine_stale_ram_get,
                                    sf2000_machine_stale_ram_set);
