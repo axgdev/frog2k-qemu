@@ -70,6 +70,16 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_ASD_SKIP        0x200ULL
 #define SF2000_ASD_LOAD_BASE   0x00000200ULL
 #define SF2000_ASD_ENTRY       0x80001000ULL
+/* Physical range of the linux-loader kernel load window (the single vmlinux
+ * LOAD segment is KSEG0 0x80600000-0x80b7c770, DTB right after it).  This is
+ * exactly where the physical-device stale-RAM faults occurred (runs
+ * 108/110/112/114: ri-epc at 0x806xxxxx).  stale-ram=on prefills only this
+ * window so the ROM call table (KSEG0 0x8101f044), the loader stack
+ * (0x879f0000), and the retained/progress areas stay untouched: garbage in
+ * those would turn the blank-ROM direct-boot configuration into a false
+ * ROM-present handoff and fault in the loader itself. */
+#define SF2000_KERNEL_WIN_PHYS_START 0x00600000ULL
+#define SF2000_KERNEL_WIN_PHYS_END   0x00c00000ULL
 #define SF2000_LINUX_DTB_ALIGN (64 * KiB)
 #define SF2000_BL_INFO_MAGIC_ADDR 0x00000010ULL
 #define SF2000_BL_INFO_PTR_ADDR   0x00000014ULL
@@ -1898,6 +1908,25 @@ static bool sf2000_machine_ge_no_irq_get(Object *obj, Error **errp)
 static void sf2000_machine_ge_no_irq_set(Object *obj, bool value, Error **errp)
 {
     sf2000_ge_no_irq = value;
+}
+
+/* When set via -M sf2000,stale-ram=on, every byte of RAM beyond the ASD
+ * blob is prefilled with the word 0x61006441 (a COP1 instruction).  This
+ * simulates a warm-boot/watchdog-reset condition where the physical RAM
+ * in the kernel load window still holds garbage from a previous image.
+ * A loader that leaves any gap in its copy+flush leaves this stale word
+ * executable, reproducing the Reserved Instruction faults seen on the
+ * physical HC15xx (run 114: ri-epc=0x80661124, ri-insn-data=0x61006441). */
+static bool sf2000_stale_ram;
+
+static bool sf2000_machine_stale_ram_get(Object *obj, Error **errp)
+{
+    return sf2000_stale_ram;
+}
+
+static void sf2000_machine_stale_ram_set(Object *obj, bool value, Error **errp)
+{
+    sf2000_stale_ram = value;
 }
 static uint64_t sf2000_ge_irq_ack_sequence;
 static uint32_t sf2000_ge_queue_min;
@@ -9309,6 +9338,31 @@ static void sf2000_load_asd(MachineState *machine)
                 size, (uint64_t)SF2000_ASD_LOAD_BASE,
                 (uint64_t)SF2000_ASD_SKIP,
                 (uint64_t)SF2000_ASD_ENTRY, machine->kernel_filename);
+
+    if (sf2000_stale_ram) {
+        /*
+         * Warm-boot simulation: fill the kernel load window with the stale
+         * word 0x61006441.  This is the exact word the run-114 device fetched
+         * as a Reserved Instruction at 0x80661124.  The ASD ROM-blob copy at
+         * reset does not reach this window, so a loader that leaves any gap
+         * in its copy+flush will leave this word executable and the kernel
+         * faults -- the regression this option exists to catch.  Only the
+         * kernel window is prefilled (see the SF2000_KERNEL_WIN_PHYS_*
+         * comment above); the ROM call table, loader stack and retained
+         * areas must keep their blank/zero QEMU state.
+         */
+        uint8_t *ram = memory_region_get_ram_ptr(sf2000_ram_region);
+        uint64_t off;
+
+        for (off = SF2000_KERNEL_WIN_PHYS_START;
+             off + 4u <= SF2000_KERNEL_WIN_PHYS_END; off += 4u) {
+            stl_le_p(ram + off, 0x61006441u);
+        }
+        info_report("sf2000: stale-ram=on: prefilled 0x%" PRIx64
+                    "-0x%" PRIx64 " with 0x61006441",
+                    (uint64_t)SF2000_KERNEL_WIN_PHYS_START,
+                    (uint64_t)SF2000_KERNEL_WIN_PHYS_END);
+    }
 }
 
 static bool sf2000_try_load_linux_elf(MachineState *machine)
@@ -9819,6 +9873,9 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_bool(oc, "ge-no-irq",
                                    sf2000_machine_ge_no_irq_get,
                                    sf2000_machine_ge_no_irq_set);
+    object_class_property_add_bool(oc, "stale-ram",
+                                   sf2000_machine_stale_ram_get,
+                                   sf2000_machine_stale_ram_set);
     object_class_property_add_str(oc, "usb0-state",
                                   sf2000_machine_usb0_state_get, NULL);
     object_class_property_add_str(oc, "usb1-state",
