@@ -4494,7 +4494,7 @@ static void sf2000_ge_rgb16_blit(uint32_t dst, uint32_t dst_pitch,
     if (sf2000_ge_fault_dest && sf2000_ge_rgb16_blit_count == 4u) {
         sf2000_ge_fault_dest = false;
         qemu_log_mask(LOG_UNIMP,
-                      "sf2000: ge fault-dest: skipped RGB565 blit %u destination write\\n",
+                      "sf2000: ge fault-dest: skipped RGB565 blit %u destination write\n",
                       sf2000_ge_rgb16_blit_count);
         return;
     }
