@@ -1362,7 +1362,11 @@ static const SF2000RegDefault sf2000_reg_defaults[] = {
     { 0x18800070, 0x80011717 }, { 0x18800074, 0x00400700 },
     { 0x18800078, 0x00083700 }, { 0x1880007c, 0x000c00c0 },
     { 0x18800080, 0x000023c0 }, { 0x18800084, 0xa00b4000 },
-    { 0x18800094, 0x000d0000 }, { 0x188000a4, 0x00002419 },
+    /* SYS_LCD_SETUP inherits the 0x000c0000 boot ROM strap on a direct
+     * boot (physical runs 145/146).  A bootloader-UI handoff ORs in bit 16
+     * (RGB enable) as a persisted write before it jumps to Linux, so the
+     * direct-boot strap is the correct cold default. */
+    { 0x18800094, 0x000c0000 }, { 0x188000a4, 0x00002419 },
     { 0x188000f0, 0x00000003 }, { 0x188000f4, 0x00000020 },
     { 0x188000f8, 0x00000020 }, { 0x188000fc, 0x00000000 },
     { 0x18800140, 0x18800140 }, { 0x18800144, 0x88ff4555 },
