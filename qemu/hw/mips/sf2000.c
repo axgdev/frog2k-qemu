@@ -2619,7 +2619,7 @@ static const char *sf2000_unifrog_trace_name(uint32_t event)
     case 106: return "unifrog.board_init.done";
     case 107: return "unifrog.storage.done";
     case 108: return "unifrog.log_reset.done";
-    case 109: return "unifrog.js.begin";
+    case 109: return "unifrog.frontend.begin";
     case 110: return "unifrog.fb_open.begin";
     case 111: return "unifrog.fb_clear.done";
     case 112: return "unifrog.boot_logo.done";
