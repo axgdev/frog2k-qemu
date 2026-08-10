@@ -1908,6 +1908,12 @@ static bool sf2000_ge_irq_pending;
 static bool sf2000_ge_strict_handoff;
 static bool sf2000_ge_owner_active;
 static bool sf2000_ge_handoff_dirty;
+/* A compositor disable after an active GE owner marks the short handoff
+ * window in which physical HC15xx does not safely service GE STATUS reads.
+ * The real bus can hold the CPU there; strict QEMU reports the access instead
+ * so a regression cannot silently pass the emulator smoke tests. */
+static bool sf2000_ge_handoff_pending;
+static bool sf2000_ge_status_read_error_logged;
 /* When set via -M sf2000,ge-no-irq=on, the GE completion never asserts the
  * EIRQ3 line even though the engine still finishes queues and latches
  * STATUS.DONE.  This reproduces the physical-device condition (the sysint
@@ -7728,6 +7734,20 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
         uint32_t ge_value;
 
         sf2000_mmio_get32(full_addr, &ge_value);
+        if (sf2000_ge_strict_handoff && sf2000_ge_handoff_pending &&
+            (full_addr & ~3u) == SF2000_GE_STATUS) {
+            /* On physical HC15xx this access can wait forever while the
+             * outgoing compositor/GE command domain is being released.  A
+             * BUSY result keeps a polling guest honest; the guest-error log
+             * makes the unsafe sequence fail the strict handoff smoke test. */
+            ge_value |= SF2000_GE_STATUS_BUSY;
+            if (!sf2000_ge_status_read_error_logged) {
+                sf2000_ge_status_read_error_logged = true;
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "sf2000: GE status read before clock-domain "
+                              "ownership release\n");
+            }
+        }
         value = ge_value >> ((full_addr & 3u) * 8u);
         if (size < 4) {
             value &= (1u << (size * 8)) - 1u;
@@ -7942,6 +7962,8 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
          * A later clear claims a fresh domain for the incoming driver. */
         sf2000_ge_owner_active = false;
         sf2000_ge_handoff_dirty = false;
+        sf2000_ge_handoff_pending = false;
+        sf2000_ge_status_read_error_logged = false;
     }
     if (size == 4 && ((full_addr >= 0x18808000 &&
                        full_addr <= 0x188081ec) ||
@@ -8227,6 +8249,16 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                     sf2000_mmio_get32(0x18808304 + bank * 0x80u, &dmba);
                     sf2000_mmio_set32(0x18808b00 + bank * 0x80u, ctl);
                     sf2000_mmio_set32(0x18808b04 + bank * 0x80u, dmba);
+                }
+                if (sf2000_ge_strict_handoff && sf2000_ge_owner_active) {
+                    uint32_t ctl0 = 0;
+                    uint32_t ctl1 = 0;
+
+                    sf2000_mmio_get32(0x18808b00, &ctl0);
+                    sf2000_mmio_get32(0x18808b80, &ctl1);
+                    if (!(ctl0 & BIT(0)) && !(ctl1 & BIT(0))) {
+                        sf2000_ge_handoff_pending = true;
+                    }
                 }
                 sf2000_gma_mask_armed[0] = false;
                 sf2000_gma_mask_armed[1] = false;
@@ -9642,6 +9674,8 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_ge_hw_reset();
     sf2000_ge_owner_active = false;
     sf2000_ge_handoff_dirty = false;
+    sf2000_ge_handoff_pending = false;
+    sf2000_ge_status_read_error_logged = false;
     sf2000_ge_reset_assert_ns = -1;
     sf2000_ge_submit_sequence = 0;
     sf2000_ge_irq_ack_sequence = 0;
