@@ -2009,6 +2009,7 @@ static uint8_t sf2000_sdio_dma_control;
 static uint8_t sf2000_sdio_cmd_control;
 static bool sf2000_sdio_dma_word_start;
 static bool sf2000_sdio_stall_once_consumed;
+static bool sf2000_sdio_stale_once_consumed;
 static uint8_t sf2000_sdio_corrupt_sector_mask;
 static bool sf2000_sdio_reset_dma_contract_violation;
 static bool sf2000_sdio_contract_command_failed;
@@ -2095,6 +2096,31 @@ static bool sf2000_sdio_should_stall_once(uint32_t lba)
         return false;
     }
     sf2000_sdio_stall_once_consumed = true;
+    return true;
+}
+
+static bool sf2000_sdio_should_leave_dma_stale_once(uint32_t lba)
+{
+    const char *setting = g_getenv("SF2000_SDIO_STALE_ONCE_LBA");
+    char *end = NULL;
+    uint64_t requested;
+    uint32_t pc;
+
+    if (!setting || !setting[0] || sf2000_sdio_stale_once_consumed ||
+        !current_cpu) {
+        return false;
+    }
+    pc = (uint32_t)MIPS_CPU(current_cpu)->env.active_tc.PC;
+    /* The ROM reads the same media before the replacement native driver.
+     * Inject only into low-KSEG0 guests so the first-stage image still loads. */
+    if (pc >= 0x81000000u) {
+        return false;
+    }
+    requested = g_ascii_strtoull(setting, &end, 0);
+    if (!end || *end || requested > UINT32_MAX || requested != lba) {
+        return false;
+    }
+    sf2000_sdio_stale_once_consumed = true;
     return true;
 }
 
@@ -6236,6 +6262,13 @@ static void sf2000_sdio_dma_read(uint32_t lba)
     bool image_backed = true;
     uint32_t i;
 
+    if (sf2000_sdio_should_leave_dma_stale_once(lba)) {
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: sdio injected successful stale DMA lba=%u dst=0x%08x len=%u\n",
+                      lba, sf2000_sdio_dma_addr, len);
+        goto complete;
+    }
+
     if (sf2000_sdio_dma_read_image_bulk(lba, len, &copied, &result)) {
         image_backed = true;
         if (len == sizeof(blank_sector) &&
@@ -6270,6 +6303,7 @@ static void sf2000_sdio_dma_read(uint32_t lba)
         copied += chunk;
     }
 
+complete:
     sf2000_sdio_xfer_done = true;
     sf2000_sdio_xfer_busy = false;
     sf2000_sdio_write_active = false;
@@ -9748,6 +9782,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_cmd_control = 0;
     sf2000_sdio_dma_word_start = false;
     sf2000_sdio_stall_once_consumed = false;
+    sf2000_sdio_stale_once_consumed = false;
     sf2000_last_unifrog_trace_count = 0;
     sf2000_last_unifrog_trace_valid = false;
     memset(sf2000_active_gma, 0, sizeof(sf2000_active_gma));
