@@ -2647,6 +2647,7 @@ static const char *sf2000_unifrog_trace_name(uint32_t event)
     case 131: return "unifrog.boot_ok.begin";
     case 132: return "unifrog.boot_ok.write_done";
     case 133: return "unifrog.ui_open.begin";
+    case 134: return "unifrog.ui_fill.done";
     case 200: return "sdk.pwm.probe_begin";
     case 202: return "sdk.pwm.register_done";
     case 210: return "sdk.backlight.probe_begin";
