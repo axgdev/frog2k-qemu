@@ -195,6 +195,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
  * command-ring backlog caused by the old, pessimistic 1 ms placeholder.
  */
 #define SF2000_GE_LATENCY_NS   (NANOSECONDS_PER_SECOND / 10000)
+/* The guest's 10 ms busy delay advances this machine's virtual clock by about
+ * 2.5 ms because the HC15xx CPU/timer divider is approximated.  One virtual
+ * millisecond still cleanly rejects the broken 10 us pulse while allowing the
+ * vendor reset sequence; keep the guest contract itself at 10 ms. */
+#define SF2000_GE_RESET_HOLD_NS SCALE_MS
 #define SF2000_GE_QUEUE_DUMP_WORDS 192
 #define SF2000_GE_QUEUE_DUMP_DEFAULT 0
 #define SF2000_GMA_BASE        0x18808000ULL
@@ -1952,6 +1957,7 @@ static void sf2000_machine_stale_ram_set(Object *obj, bool value, Error **errp)
 }
 static uint64_t sf2000_ge_irq_ack_sequence;
 static uint32_t sf2000_ge_queue_min;
+static int64_t sf2000_ge_reset_assert_ns = -1;
 static MemoryRegion *sf2000_ram_region;
 static bool sf2000_bootrom_ram_entry;
 static uint8_t sf2000_sflash_cmd;
@@ -7878,10 +7884,28 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_sdio_ip_reset();
     }
     if (i != ARRAY_SIZE(sf2000_regs) &&
-        (full_addr & ~3u) == 0x18800080 &&
-        !(old_value & BIT(4)) &&
-        (sf2000_regs[i].value & BIT(4))) {
-        sf2000_ge_hw_reset();
+        (full_addr & ~3u) == 0x18800080) {
+        bool was_asserted = old_value & BIT(4);
+        bool is_asserted = sf2000_regs[i].value & BIT(4);
+
+        if (!was_asserted && is_asserted) {
+            sf2000_ge_reset_assert_ns =
+                qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        } else if (was_asserted && !is_asserted) {
+            int64_t held_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) -
+                              sf2000_ge_reset_assert_ns;
+
+            if (sf2000_ge_reset_assert_ns >= 0 &&
+                held_ns >= SF2000_GE_RESET_HOLD_NS) {
+                sf2000_ge_hw_reset();
+            } else {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "sf2000: GE reset pulse too short "
+                              "held=%" PRId64 "ns required=%" PRId64 "ns\n",
+                              held_ns, (int64_t)SF2000_GE_RESET_HOLD_NS);
+            }
+            sf2000_ge_reset_assert_ns = -1;
+        }
     }
     if (size == 4 && ((full_addr >= 0x18808000 &&
                        full_addr <= 0x188081ec) ||
@@ -9580,6 +9604,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_wdt_count = 0;
     sf2000_wdt_disable();
     sf2000_ge_hw_reset();
+    sf2000_ge_reset_assert_ns = -1;
     sf2000_ge_submit_sequence = 0;
     sf2000_ge_irq_ack_sequence = 0;
     sf2000_handoff_flush_logged = false;
