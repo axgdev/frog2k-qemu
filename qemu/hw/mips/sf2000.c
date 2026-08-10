@@ -5420,7 +5420,12 @@ static void sf2000_ge_hw_reset(void)
      * pointers.  Keeping the old HQ_FIRST here would make a guest that
      * correctly resets its retained command context look as if it rewound an
      * invalid ring. */
-    if (sf2000_ge_owner_active) {
+    /* Once the incoming OS has released the handoff gate, its own reset and
+     * queue-restart cycles must not re-arm the outgoing-owner guard.  The
+     * guard is only meaningful while the bootloader still owns the command
+     * domain; otherwise a normal stock/hcRTOS reset would make every later
+     * doorbell look like an illegal pre-handoff submission. */
+    if (sf2000_ge_owner_active && sf2000_ge_handoff_armed) {
         sf2000_ge_handoff_dirty = true;
     }
     sf2000_ge_irq_pending = false;
