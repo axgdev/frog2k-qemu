@@ -7946,8 +7946,14 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             int64_t held_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) -
                               sf2000_ge_reset_assert_ns;
 
-            if (sf2000_ge_reset_assert_ns >= 0 &&
-                held_ns >= SF2000_GE_RESET_HOLD_NS) {
+            if (!sf2000_ge_strict_handoff || !sf2000_ge_handoff_armed) {
+                /* Linux/hcRTOS own the block after the clock-gate release and
+                 * intentionally use the vendor driver's 10 us reset pulse.
+                 * Enforce the longer handoff pulse only for the outgoing
+                 * NuttX owner; incoming-OS reset still clears the model. */
+                sf2000_ge_hw_reset();
+            } else if (sf2000_ge_reset_assert_ns >= 0 &&
+                       held_ns >= SF2000_GE_RESET_HOLD_NS) {
                 sf2000_ge_hw_reset();
             } else {
                 qemu_log_mask(LOG_GUEST_ERROR,
