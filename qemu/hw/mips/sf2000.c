@@ -1901,6 +1901,13 @@ static uint8_t sf2000_bootrom_bytes[SF2000_BOOT_SIZE];
 static QEMUTimer *sf2000_irq_poll_timer;
 static QEMUTimer *sf2000_ge_timer;
 static bool sf2000_ge_irq_pending;
+/* Physical HC15xx can retain the GE command-domain owner across a peripheral
+ * reset.  The active-low clock gate is the ownership boundary that clears
+ * that state.  Keep this opt-in so generic firmware behavior is unchanged,
+ * while chainloader tests can reproduce a reset-only handoff deadlock. */
+static bool sf2000_ge_strict_handoff;
+static bool sf2000_ge_owner_active;
+static bool sf2000_ge_handoff_dirty;
 /* When set via -M sf2000,ge-no-irq=on, the GE completion never asserts the
  * EIRQ3 line even though the engine still finishes queues and latches
  * STATUS.DONE.  This reproduces the physical-device condition (the sysint
@@ -1935,6 +1942,17 @@ static bool sf2000_machine_ge_no_irq_get(Object *obj, Error **errp)
 static void sf2000_machine_ge_no_irq_set(Object *obj, bool value, Error **errp)
 {
     sf2000_ge_no_irq = value;
+}
+
+static bool sf2000_machine_ge_strict_handoff_get(Object *obj, Error **errp)
+{
+    return sf2000_ge_strict_handoff;
+}
+
+static void sf2000_machine_ge_strict_handoff_set(Object *obj, bool value,
+                                                  Error **errp)
+{
+    sf2000_ge_strict_handoff = value;
 }
 
 /* When set via -M sf2000,stale-ram=on, every byte of RAM beyond the ASD
@@ -5388,6 +5406,9 @@ static void sf2000_ge_hw_reset(void)
      * pointers.  Keeping the old HQ_FIRST here would make a guest that
      * correctly resets its retained command context look as if it rewound an
      * invalid ring. */
+    if (sf2000_ge_owner_active) {
+        sf2000_ge_handoff_dirty = true;
+    }
     sf2000_ge_irq_pending = false;
     sf2000_ge_queue_min = 0;
     if (sf2000_ge_timer) {
@@ -5445,6 +5466,12 @@ static void sf2000_ge_start_queue(void)
                       clock_gate);
         return;
     }
+    if (sf2000_ge_strict_handoff && sf2000_ge_handoff_dirty) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: GE doorbell before clock-domain ownership "
+                      "release\n");
+        return;
+    }
     if ((clock & (3u << 18)) != (3u << 18)) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "sf2000: GE invalid clock selector sfclk=%08x\n",
@@ -5493,6 +5520,7 @@ static void sf2000_ge_start_queue(void)
     sf2000_mmio_set32(SF2000_GE_STATUS, status);
     sf2000_ge_irq_pending = false;
     sf2000_ge_submit_sequence++;
+    sf2000_ge_owner_active = true;
     if (sf2000_scanout_oracle() &&
         (sf2000_ge_submit_sequence <= 8 ||
          !(sf2000_ge_submit_sequence % 300))) {
@@ -7907,6 +7935,14 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
             sf2000_ge_reset_assert_ns = -1;
         }
     }
+    if (i != ARRAY_SIZE(sf2000_regs) &&
+        (full_addr & ~3u) == 0x18800064 &&
+        !(old_value & BIT(4)) && (sf2000_regs[i].value & BIT(4))) {
+        /* GE's active-low clock gate releases the old command-domain owner.
+         * A later clear claims a fresh domain for the incoming driver. */
+        sf2000_ge_owner_active = false;
+        sf2000_ge_handoff_dirty = false;
+    }
     if (size == 4 && ((full_addr >= 0x18808000 &&
                        full_addr <= 0x188081ec) ||
                       full_addr == 0x18800078 ||
@@ -9604,6 +9640,8 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_wdt_count = 0;
     sf2000_wdt_disable();
     sf2000_ge_hw_reset();
+    sf2000_ge_owner_active = false;
+    sf2000_ge_handoff_dirty = false;
     sf2000_ge_reset_assert_ns = -1;
     sf2000_ge_submit_sequence = 0;
     sf2000_ge_irq_ack_sequence = 0;
@@ -9999,6 +10037,9 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_bool(oc, "ge-no-irq",
                                    sf2000_machine_ge_no_irq_get,
                                    sf2000_machine_ge_no_irq_set);
+    object_class_property_add_bool(oc, "ge-strict-handoff",
+                                   sf2000_machine_ge_strict_handoff_get,
+                                   sf2000_machine_ge_strict_handoff_set);
     object_class_property_add_bool(oc, "ge-fault-dest",
                                    sf2000_machine_ge_fault_dest_get,
                                    sf2000_machine_ge_fault_dest_set);
