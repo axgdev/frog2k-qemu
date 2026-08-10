@@ -2259,6 +2259,7 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
 #define SF2000_HANDOFF_BEGIN       0x42544844U
 #define SF2000_HANDOFF_ROM_FLUSH   0x52464c55U
 #define SF2000_HANDOFF_VENDOR_RESTORED 0x56414249U
+#define SF2000_HANDOFF_ROM_MOUNTED 0x524d4e54U
 #define SF2000_HANDOFF_DCACHE_BEGIN 0x44434247U
 #define SF2000_HANDOFF_DCACHE_OK    0x44434f4bU
 #define SF2000_HANDOFF_ICACHE_BEGIN 0x49434247U
@@ -2791,6 +2792,8 @@ static void sf2000_trace_boot_handoff(void)
     uint32_t destination_entry[2];
     uint32_t source_entry[2];
     uint32_t vendor_state;
+    uint32_t rom_mount_result;
+    uint32_t rom_mount_marker;
     uint32_t dcache_begin;
     uint32_t dcache_ok;
     uint32_t icache_begin;
@@ -2925,6 +2928,12 @@ static void sf2000_trace_boot_handoff(void)
     vendor_state = address_space_ldl_le(
         &address_space_memory, diag + 0x7c,
         MEMTXATTRS_UNSPECIFIED, &res);
+    rom_mount_result = address_space_ldl_le(
+        &address_space_memory, diag + 0x140,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    rom_mount_marker = address_space_ldl_le(
+        &address_space_memory, diag + 0x144,
+        MEMTXATTRS_UNSPECIFIED, &res);
     dcache_begin = address_space_ldl_le(
         &address_space_memory, diag + 0xc8,
         MEMTXATTRS_UNSPECIFIED, &res);
@@ -2992,6 +3001,16 @@ static void sf2000_trace_boot_handoff(void)
     }
 
     if (diag == SF2000_HANDOFF_DIAG_PHYS &&
+        (res != MEMTX_OK || rom_mount_marker != SF2000_HANDOFF_ROM_MOUNTED ||
+         rom_mount_result != 0)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: boot handoff ROM storage session unavailable"
+                      " marker=0x%08x result=0x%08x\n",
+                      rom_mount_marker, rom_mount_result);
+        return;
+    }
+
+    if (diag == SF2000_HANDOFF_DIAG_PHYS &&
         (res != MEMTX_OK || dcache_begin != SF2000_HANDOFF_DCACHE_BEGIN ||
          dcache_ok != SF2000_HANDOFF_DCACHE_OK)) {
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -3037,7 +3056,8 @@ static void sf2000_trace_boot_handoff(void)
     qemu_log_mask(LOG_UNIMP,
                   "sf2000: boot handoff ROM cache flush returned"
                   " payload=%u entry=%08x/%08x vendor_state=%s"
-                  " dcache=clean icache=clean mode=%s state=%08x\n",
+                  " rom_mount=ready dcache=clean icache=clean"
+                  " mode=%s state=%08x\n",
                   payload_size, destination_entry[0], destination_entry[1],
                   diag == SF2000_HANDOFF_DIAG_PHYS ? "restored" : "legacy",
                   diag == SF2000_HANDOFF_DIAG_PHYS &&
