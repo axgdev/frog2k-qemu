@@ -2260,6 +2260,7 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
 #define SF2000_HANDOFF_ROM_FLUSH   0x52464c55U
 #define SF2000_HANDOFF_VENDOR_RESTORED 0x56414249U
 #define SF2000_HANDOFF_ROM_MOUNTED 0x524d4e54U
+#define SF2000_HANDOFF_ROM_RELOADED 0x524c4f44U
 #define SF2000_HANDOFF_DCACHE_BEGIN 0x44434247U
 #define SF2000_HANDOFF_DCACHE_OK    0x44434f4bU
 #define SF2000_HANDOFF_ICACHE_BEGIN 0x49434247U
@@ -2639,6 +2640,12 @@ static const char *sf2000_unifrog_trace_name(uint32_t event)
     case 125: return "unifrog.ge_sync.done";
     case 126: return "unifrog.ui_present.begin";
     case 127: return "unifrog.ui_present.done";
+    case 128: return "unifrog.input.local_done";
+    case 129: return "unifrog.input.wireless_done";
+    case 130: return "unifrog.input.clear_done";
+    case 131: return "unifrog.boot_ok.begin";
+    case 132: return "unifrog.boot_ok.write_done";
+    case 133: return "unifrog.ui_open.begin";
     case 200: return "sdk.pwm.probe_begin";
     case 202: return "sdk.pwm.register_done";
     case 210: return "sdk.backlight.probe_begin";
@@ -2794,6 +2801,8 @@ static void sf2000_trace_boot_handoff(void)
     uint32_t vendor_state;
     uint32_t rom_mount_result;
     uint32_t rom_mount_marker;
+    uint32_t rom_reload_marker;
+    uint32_t rom_reload_result;
     uint32_t dcache_begin;
     uint32_t dcache_ok;
     uint32_t icache_begin;
@@ -2934,6 +2943,12 @@ static void sf2000_trace_boot_handoff(void)
     rom_mount_marker = address_space_ldl_le(
         &address_space_memory, diag + 0x144,
         MEMTXATTRS_UNSPECIFIED, &res);
+    rom_reload_marker = address_space_ldl_le(
+        &address_space_memory, diag + 0x1c0,
+        MEMTXATTRS_UNSPECIFIED, &res);
+    rom_reload_result = address_space_ldl_le(
+        &address_space_memory, diag + 0x1c8,
+        MEMTXATTRS_UNSPECIFIED, &res);
     dcache_begin = address_space_ldl_le(
         &address_space_memory, diag + 0xc8,
         MEMTXATTRS_UNSPECIFIED, &res);
@@ -3011,6 +3026,16 @@ static void sf2000_trace_boot_handoff(void)
     }
 
     if (diag == SF2000_HANDOFF_DIAG_PHYS &&
+        (res != MEMTX_OK || rom_reload_marker != SF2000_HANDOFF_ROM_RELOADED ||
+         rom_reload_result != 0)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: boot handoff ROM payload reload incomplete"
+                      " marker=0x%08x result=0x%08x\n",
+                      rom_reload_marker, rom_reload_result);
+        return;
+    }
+
+    if (diag == SF2000_HANDOFF_DIAG_PHYS &&
         (res != MEMTX_OK || dcache_begin != SF2000_HANDOFF_DCACHE_BEGIN ||
          dcache_ok != SF2000_HANDOFF_DCACHE_OK)) {
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -3056,7 +3081,8 @@ static void sf2000_trace_boot_handoff(void)
     qemu_log_mask(LOG_UNIMP,
                   "sf2000: boot handoff ROM cache flush returned"
                   " payload=%u entry=%08x/%08x vendor_state=%s"
-                  " rom_mount=ready dcache=clean icache=clean"
+                  " rom_mount=ready rom_reload=ready"
+                  " dcache=clean icache=clean"
                   " mode=%s state=%08x\n",
                   payload_size, destination_entry[0], destination_entry[1],
                   diag == SF2000_HANDOFF_DIAG_PHYS ? "restored" : "legacy",
