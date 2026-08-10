@@ -2681,6 +2681,11 @@ static const char *sf2000_unifrog_trace_name(uint32_t event)
     case 132: return "unifrog.boot_ok.write_done";
     case 133: return "unifrog.ui_open.begin";
     case 134: return "unifrog.ui_fill.done";
+    case 135: return "unifrog.ge_open.done";
+    case 136: return "unifrog.ge_fill.setup";
+    case 137: return "unifrog.ge_state.done";
+    case 138: return "unifrog.ge_submit.begin";
+    case 139: return "unifrog.ge_submit.done";
     case 200: return "sdk.pwm.probe_begin";
     case 202: return "sdk.pwm.register_done";
     case 210: return "sdk.backlight.probe_begin";
@@ -5460,6 +5465,7 @@ static void sf2000_ge_start_queue(void)
     uint32_t last = 0;
     uint32_t start = 0;
     uint32_t clock = 0;
+    unsigned clock_selector;
     uint32_t clock_gate = 0;
     uint32_t context[7] = { 0 };
 
@@ -5468,6 +5474,7 @@ static void sf2000_ge_start_queue(void)
     sf2000_mmio_get32(SF2000_GE_HQ_LAST, &last);
     sf2000_mmio_get32(SF2000_GE_START, &start);
     sf2000_mmio_get32(0x1880007c, &clock);
+    clock_selector = (clock >> 18) & 3u;
     if (sf2000_mmio_get32(0x18800064, &clock_gate) &&
         (clock_gate & BIT(4)) != 0u) {
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -5481,12 +5488,12 @@ static void sf2000_ge_start_queue(void)
                       "release\n");
         return;
     }
-    if ((clock & (3u << 18)) != (3u << 18)) {
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "sf2000: GE invalid clock selector sfclk=%08x\n",
-                      clock);
-        return;
-    }
+    /* SYS_SFCLK[19:18] is the GE source selector.  All four encodings are
+     * real HC15xx sources (198, 148, 225, and 238 MHz); in particular the
+     * vendor hcRTOS driver deliberately selects encoding 0 for its 198 MHz
+     * "fast" clock.  Treating only encoding 3 as valid made the model drop a
+     * perfectly good doorbell while the idle sync path reported success,
+     * masking the very queue failures this model is meant to catch. */
     if (!sf2000_ge_queue_min || first < sf2000_ge_queue_min) {
         sf2000_ge_queue_min = first;
     }
@@ -5541,11 +5548,11 @@ static void sf2000_ge_start_queue(void)
         qemu_log_mask(LOG_UNIMP,
                       "sf2000: ge-queue start seq=%" PRIu64
                       " first=%08x last=%08x latency_ns=%" PRId64
-                      " status=%08x producer=%08x wrap_at=%08x\n",
+                      " status=%08x producer=%08x wrap_at=%08x clock=%u\n",
                       sf2000_ge_submit_sequence,
                       first, last,
                       (int64_t)SF2000_GE_LATENCY_NS,
-                      status, context[6], context[5]);
+                      status, context[6], context[5], clock_selector);
     }
     sf2000_update_irq();
     timer_mod(sf2000_ge_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
@@ -7915,12 +7922,31 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                 (context[6] & ~1u) >= context[0] &&
                 (context[6] & ~1u) <= context[1];
 
+            /* The vendor hcRTOS queue deliberately rewinds an idle ring to
+             * phy_addr_min after an IRQ has marked is_finish.  Its
+             * point_wrap_addr is the last consumed word, not the old
+             * HQ_FIRST value used by the NuttX wrap contract above.  This is
+             * a complete-ring restart, not an in-flight rewind; accepting it
+             * keeps QEMU faithful to hcge_feed_nodes while still rejecting
+             * an unmarked backwards move. */
+            if (!valid && new_first >= GE_CMDQ_CONTEXT_BYTES &&
+                sf2000_ge_read_node(new_first - GE_CMDQ_CONTEXT_BYTES,
+                                    context, ARRAY_SIZE(context)) &&
+                context[0] == new_first && context[1] > context[0] &&
+                context[2] != 0u &&
+                (context[6] & ~1u) == new_first) {
+                valid = true;
+            }
+
             if (!valid) {
                 sf2000_regs[i].value = old_value;
                 qemu_log_mask(LOG_GUEST_ERROR,
                               "sf2000: GE invalid unmarked ring rewind "
-                              "first=0x%08x requested=0x%08x\n",
-                              old_value, new_first);
+                              "first=0x%08x requested=0x%08x "
+                              "ctx=%08x/%08x/%08x/%08x/%08x/%08x/%08x\n",
+                              old_value, new_first,
+                              context[0], context[1], context[2], context[3],
+                              context[4], context[5], context[6]);
             }
         }
         if ((full_addr & ~3u) == 0x18800080 &&
