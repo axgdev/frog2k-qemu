@@ -1911,7 +1911,10 @@ static bool sf2000_ge_handoff_dirty;
 /* A compositor disable after an active GE owner marks the short handoff
  * window in which physical HC15xx does not safely service GE STATUS reads.
  * The real bus can hold the CPU there; strict QEMU reports the access instead
- * so a regression cannot silently pass the emulator smoke tests. */
+ * so a regression cannot silently pass the emulator smoke tests.  Arm this
+ * only for the outgoing NuttX owner; otherwise an incoming OS's ordinary GMA
+ * reconfiguration would look like a second boot handoff. */
+static bool sf2000_ge_handoff_armed;
 static bool sf2000_ge_handoff_pending;
 static bool sf2000_ge_status_read_error_logged;
 /* When set via -M sf2000,ge-no-irq=on, the GE completion never asserts the
@@ -7962,6 +7965,7 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
          * A later clear claims a fresh domain for the incoming driver. */
         sf2000_ge_owner_active = false;
         sf2000_ge_handoff_dirty = false;
+        sf2000_ge_handoff_armed = false;
         sf2000_ge_handoff_pending = false;
         sf2000_ge_status_read_error_logged = false;
     }
@@ -8250,7 +8254,8 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
                     sf2000_mmio_set32(0x18808b00 + bank * 0x80u, ctl);
                     sf2000_mmio_set32(0x18808b04 + bank * 0x80u, dmba);
                 }
-                if (sf2000_ge_strict_handoff && sf2000_ge_owner_active) {
+                if (sf2000_ge_strict_handoff && sf2000_ge_handoff_armed &&
+                    sf2000_ge_owner_active) {
                     uint32_t ctl0 = 0;
                     uint32_t ctl1 = 0;
 
@@ -9674,6 +9679,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_ge_hw_reset();
     sf2000_ge_owner_active = false;
     sf2000_ge_handoff_dirty = false;
+    sf2000_ge_handoff_armed = true;
     sf2000_ge_handoff_pending = false;
     sf2000_ge_status_read_error_logged = false;
     sf2000_ge_reset_assert_ns = -1;
