@@ -2280,8 +2280,8 @@ static const SF2000PCLandmark sf2000_pc_landmarks[] = {
 #define SF2000_BOOT_STAGE_END      0x07fe0000ULL
 #define SF2000_BOOT_STAGE_END_ADDR 0x87fe0000U
 #define SF2000_BOOT_FASTBOOT_PHYS  0x07fe0000ULL
-#define SF2000_BOOT_HANDOFF_ADDR   0x87ff7000U
-#define SF2000_BOOT_HANDOFF_PHYS  0x07ff7000ULL
+#define SF2000_BOOT_HANDOFF_ADDR   0x87fe0000U
+#define SF2000_BOOT_HANDOFF_PHYS  0x07fe0000ULL
 #define SF2000_BOOT_HANDOFF_BYTES  0x00001000ULL
 
 typedef struct SF2000ProgressEntry {
@@ -6462,6 +6462,11 @@ static void sf2000_sdio_complete_cmd(void)
 
     switch (sf2000_sdio_cmd) {
     case 0:
+        /* GO_IDLE_STATE resets card-side protocol state while host reset is
+         * deliberately modelled separately.  Keeping those ownership domains
+         * distinct lets chained-boot tests catch a host-only reset that leaves
+         * a selected 4-bit card behind. */
+        sf2000_sdio_bus_width = 1;
         break;
     case 6:
         if (is_app_cmd) {
