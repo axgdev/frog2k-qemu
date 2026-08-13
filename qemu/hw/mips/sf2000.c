@@ -1916,6 +1916,12 @@ static bool sf2000_ge_strict_handoff;
 static uint32_t sf2000_test_exit_unifrog_event;
 static bool sf2000_ge_owner_active;
 static bool sf2000_ge_handoff_dirty;
+/* HC15xx can accept a SYS_SFCLK write while GE is idle yet stop consuming
+ * the following command when that write changes the live source.  A later
+ * hardware reset recovers it; a same-selector write is harmless.  Track the
+ * distinction so strict handoff tests reject the sequence seen on physical
+ * UniFrog v0.5.2 instead of treating every successful MMIO write as safe. */
+static bool sf2000_ge_clock_transition_unsafe;
 /* A compositor disable after an active GE owner marks the short handoff
  * window in which physical HC15xx does not safely service GE STATUS reads.
  * The real bus can hold the CPU there; strict QEMU reports the access instead
@@ -5471,6 +5477,7 @@ static void sf2000_ge_hw_reset(void)
         sf2000_ge_handoff_dirty = true;
     }
     sf2000_ge_irq_pending = false;
+    sf2000_ge_clock_transition_unsafe = false;
     sf2000_ge_queue_min = 0;
     if (sf2000_ge_timer) {
         timer_del(sf2000_ge_timer);
@@ -5533,6 +5540,13 @@ static void sf2000_ge_start_queue(void)
         qemu_log_mask(LOG_GUEST_ERROR,
                       "sf2000: GE doorbell before clock-domain ownership "
                       "release\n");
+        return;
+    }
+    if (sf2000_ge_strict_handoff &&
+        sf2000_ge_clock_transition_unsafe) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sf2000: GE doorbell after live clock selector "
+                      "transition\n");
         return;
     }
     /* SYS_SFCLK[19:18] is the GE source selector.  All four encodings are
@@ -7955,6 +7969,34 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         mask <<= shift;
         sf2000_regs[i].value = (old_value & ~mask) |
                                (((uint32_t)value << shift) & mask);
+        if (sf2000_ge_strict_handoff &&
+            (full_addr & ~3u) == 0x1880007c &&
+            ((old_value ^ sf2000_regs[i].value) & (3u << 18)) != 0u) {
+            uint32_t gate = 0;
+            uint32_t reset = 0;
+
+            sf2000_mmio_get32(0x18800064, &gate);
+            sf2000_mmio_get32(0x18800080, &reset);
+            if (!(gate & BIT(4)) && !(reset & BIT(4))) {
+                uint32_t pc = 0;
+                uint32_t ra = 0;
+
+                if (current_cpu) {
+                    MIPSCPU *cpu = MIPS_CPU(current_cpu);
+
+                    pc = (uint32_t)cpu->env.active_tc.PC;
+                    ra = (uint32_t)cpu->env.active_tc.gpr[31];
+                }
+                sf2000_ge_clock_transition_unsafe = true;
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "sf2000: GE live clock selector transition "
+                              "old=%u new=%u gate=%08x reset=%08x "
+                              "pc=%08x ra=%08x\n",
+                              (old_value >> 18) & 3u,
+                              (sf2000_regs[i].value >> 18) & 3u,
+                              gate, reset, pc, ra);
+            }
+        }
         /*
          * HQ_FIRST is a hardware consumer pointer.  HC15xx only permits it
          * to move backwards after the producer publishes the vendor ring
@@ -8052,6 +8094,7 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
          * A later clear claims a fresh domain for the incoming driver. */
         sf2000_ge_owner_active = false;
         sf2000_ge_handoff_dirty = false;
+        sf2000_ge_clock_transition_unsafe = false;
         sf2000_ge_handoff_armed = false;
         sf2000_ge_handoff_pending = false;
         sf2000_ge_status_read_error_logged = false;
@@ -9766,6 +9809,7 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_ge_hw_reset();
     sf2000_ge_owner_active = false;
     sf2000_ge_handoff_dirty = false;
+    sf2000_ge_clock_transition_unsafe = false;
     sf2000_ge_handoff_armed = true;
     sf2000_ge_handoff_pending = false;
     sf2000_ge_status_read_error_logged = false;
