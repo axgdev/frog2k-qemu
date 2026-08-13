@@ -1906,6 +1906,14 @@ static bool sf2000_ge_irq_pending;
  * that state.  Keep this opt-in so generic firmware behavior is unchanged,
  * while chainloader tests can reproduce a reset-only handoff deadlock. */
 static bool sf2000_ge_strict_handoff;
+/* Optional test milestone.  A value of zero keeps normal machine behaviour;
+ * a non-zero UniFrog retained-trace event requests a clean QEMU shutdown as
+ * soon as that event is observed.  This lets Makefile smoke tests finish at
+ * their asserted success boundary instead of burning the remainder of a
+ * conservative wall-clock timeout.  The trace entry is logged before the
+ * shutdown request, so the existing post-run assertions remain authoritative.
+ */
+static uint32_t sf2000_test_exit_unifrog_event;
 static bool sf2000_ge_owner_active;
 static bool sf2000_ge_handoff_dirty;
 /* A compositor disable after an active GE owner marks the short handoff
@@ -2774,6 +2782,14 @@ static void sf2000_trace_unifrog_log(void)
                       "sf2000: unifrog-trace seq=%u event=%u name=%s arg0=0x%08x arg1=0x%08x arg2=0x%08x r05=0x%03x\n",
                       seq, event, sf2000_unifrog_trace_name(event),
                       arg0, arg1, arg2, r05);
+        if (sf2000_test_exit_unifrog_event == event) {
+            qemu_log_mask(LOG_UNIMP,
+                          "sf2000: test milestone reached event=%u name=%s\n",
+                          event, sf2000_unifrog_trace_name(event));
+            sf2000_test_exit_unifrog_event = 0;
+            qemu_system_shutdown_request_with_code(
+                SHUTDOWN_CAUSE_GUEST_SHUTDOWN, 0);
+        }
     }
     sf2000_last_unifrog_trace_count = i;
     sf2000_last_unifrog_trace_valid = true;
@@ -10152,6 +10168,9 @@ static void sf2000_machine_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_bool(oc, "ge-strict-handoff",
                                    sf2000_machine_ge_strict_handoff_get,
                                    sf2000_machine_ge_strict_handoff_set);
+    object_class_property_add_uint32_ptr(oc, "test-exit-unifrog-event",
+                                         &sf2000_test_exit_unifrog_event,
+                                         OBJ_PROP_FLAG_READWRITE);
     object_class_property_add_bool(oc, "ge-fault-dest",
                                    sf2000_machine_ge_fault_dest_get,
                                    sf2000_machine_ge_fault_dest_set);
