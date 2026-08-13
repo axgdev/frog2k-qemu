@@ -2026,6 +2026,15 @@ static bool sf2000_sdio_stall_once_consumed;
 static bool sf2000_sdio_stale_once_consumed;
 static uint8_t sf2000_sdio_corrupt_sector_mask;
 static bool sf2000_sdio_reset_dma_contract_violation;
+/* The HC15xx samples ARG/CMD/RESP_CTRL only after the terminal IRQ has been
+ * acknowledged.  The old model accepted an acknowledge before those fields,
+ * which let a guest pass QEMU while the physical controller dropped the next
+ * command.  Track the programming boundary in strict native mode. */
+static bool sf2000_sdio_arg_programmed;
+static bool sf2000_sdio_cmd_programmed;
+static bool sf2000_sdio_cmdctl_programmed;
+static bool sf2000_sdio_command_order_violation;
+static bool sf2000_sdio_post_completion_ack_pending;
 static bool sf2000_sdio_contract_command_failed;
 static bool sf2000_sdio_reset_contract_window;
 static bool sf2000_sb_timer_irq_masked;
@@ -2191,6 +2200,11 @@ static void sf2000_sdio_ip_reset(void)
     sf2000_sdio_cmd_control = 0;
     sf2000_sdio_host_bus_width = 1;
     sf2000_sdio_dma_word_start = false;
+    sf2000_sdio_arg_programmed = false;
+    sf2000_sdio_cmd_programmed = false;
+    sf2000_sdio_cmdctl_programmed = false;
+    sf2000_sdio_command_order_violation = false;
+    sf2000_sdio_post_completion_ack_pending = false;
     sf2000_sdio_reset_dma_contract_violation = false;
     sf2000_sdio_contract_command_failed = false;
     sf2000_sdio_reset_contract_window = true;
@@ -6612,7 +6626,11 @@ static void sf2000_sdio_complete_cmd(void)
      * set forever.  Keep the default model permissive for old stock traces,
      * but let the native-driver smoke opt into this observed contract. */
     if (sf2000_sdio_strict_native() &&
-        sf2000_sdio_reset_dma_contract_violation) {
+        (sf2000_sdio_reset_dma_contract_violation ||
+         sf2000_sdio_command_order_violation ||
+         !sf2000_sdio_arg_programmed ||
+         !sf2000_sdio_cmd_programmed ||
+         !sf2000_sdio_cmdctl_programmed)) {
         sf2000_sdio_contract_command_failed = true;
         sf2000_sdio_reset_contract_window = false;
         sf2000_sdio_xfer_done = false;
@@ -6620,9 +6638,14 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_irq_pending = false;
         sf2000_sdio_callback_pending = false;
         qemu_log_mask(LOG_GUEST_ERROR,
-                      "sf2000: SDIO native contract violation: "
-                      "reset-time DMA control write blocked command %u\n",
+                      "sf2000: SDIO native contract violation: command %u "
+                      "started before ARG/CMD/RESP_CTRL/IRQ ordering completed\n",
                       sf2000_sdio_cmd);
+        sf2000_sdio_arg_programmed = false;
+        sf2000_sdio_cmd_programmed = false;
+        sf2000_sdio_cmdctl_programmed = false;
+        sf2000_sdio_command_order_violation = false;
+        sf2000_sdio_post_completion_ack_pending = false;
         return;
     }
     sf2000_sdio_reset_contract_window = false;
@@ -6634,6 +6657,11 @@ static void sf2000_sdio_complete_cmd(void)
         sf2000_sdio_callback_pending = false;
         qemu_log_mask(LOG_GUEST_ERROR,
                       "sf2000: SDIO native command blocked after contract mismatch\n");
+        sf2000_sdio_arg_programmed = false;
+        sf2000_sdio_cmd_programmed = false;
+        sf2000_sdio_cmdctl_programmed = false;
+        sf2000_sdio_command_order_violation = false;
+        sf2000_sdio_post_completion_ack_pending = false;
         return;
     }
 
@@ -6755,6 +6783,11 @@ static void sf2000_sdio_complete_cmd(void)
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: sdio injected one-shot stall lba=%u\n",
                           sf2000_sdio_arg);
+            sf2000_sdio_arg_programmed = false;
+            sf2000_sdio_cmd_programmed = false;
+            sf2000_sdio_cmdctl_programmed = false;
+            sf2000_sdio_command_order_violation = false;
+            sf2000_sdio_post_completion_ack_pending = false;
             return;
         }
         sf2000_sdio_xfer_done = false;
@@ -6774,6 +6807,11 @@ static void sf2000_sdio_complete_cmd(void)
             qemu_log_mask(LOG_UNIMP,
                           "sf2000: sdio injected one-shot stall lba=%u\n",
                           sf2000_sdio_arg);
+            sf2000_sdio_arg_programmed = false;
+            sf2000_sdio_cmd_programmed = false;
+            sf2000_sdio_cmdctl_programmed = false;
+            sf2000_sdio_command_order_violation = false;
+            sf2000_sdio_post_completion_ack_pending = false;
             return;
         }
         sf2000_sdio_xfer_done = false;
@@ -6825,6 +6863,12 @@ static void sf2000_sdio_complete_cmd(void)
                       sf2000_sdio_resp[3],
                       sf2000_sdio_bus_width ? sf2000_sdio_bus_width : 1);
     }
+
+    sf2000_sdio_arg_programmed = false;
+    sf2000_sdio_cmd_programmed = false;
+    sf2000_sdio_cmdctl_programmed = false;
+    sf2000_sdio_command_order_violation = false;
+    sf2000_sdio_post_completion_ack_pending = true;
 }
 
 static void sf2000_panel_update_rect(SF2000LCDState *s, uint16_t x, uint16_t y)
@@ -8431,8 +8475,10 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         }
     } else if (full_addr == 0x1884c004) {
         sf2000_sdio_arg = value;
+        sf2000_sdio_arg_programmed = true;
     } else if (full_addr == 0x1884c002) {
         sf2000_sdio_cmd = value & 0x3f;
+        sf2000_sdio_cmd_programmed = true;
         if (sf2000_sdio_cmd == 24 || sf2000_sdio_cmd == 25) {
             sf2000_sdio_write_active = true;
         }
@@ -8446,6 +8492,17 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         sf2000_sdio_dma_wr_len = value;
     } else if (full_addr == 0x1884c030) {
         if (value & 0x40) {
+            if (sf2000_sdio_strict_native() &&
+                !sf2000_sdio_post_completion_ack_pending &&
+                (!sf2000_sdio_arg_programmed ||
+                 !sf2000_sdio_cmd_programmed ||
+                 !sf2000_sdio_cmdctl_programmed)) {
+                sf2000_sdio_command_order_violation = true;
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "sf2000: SDIO native contract violation: "
+                              "IRQ acknowledge preceded command fields\n");
+            }
+            sf2000_sdio_post_completion_ack_pending = false;
             sf2000_sdio_dma_control = value & 0x21;
             sf2000_sdio_dma_word_start = false;
             sf2000_sdio_xfer_done = false;
@@ -8505,6 +8562,9 @@ static void sf2000_unimp_write(void *opaque, hwaddr addr, uint64_t value,
         }
     } else if (full_addr == 0x1884c000) {
         sf2000_sdio_cmd_control = value & 0xff;
+        if (!(value & 1)) {
+            sf2000_sdio_cmdctl_programmed = true;
+        }
         if (value & 1) {
             sf2000_sdio_complete_cmd();
         }
@@ -9841,6 +9901,11 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_sdio_dma_control = 0x20;
     sf2000_sdio_cmd_control = 0;
     sf2000_sdio_dma_word_start = false;
+    sf2000_sdio_arg_programmed = false;
+    sf2000_sdio_cmd_programmed = false;
+    sf2000_sdio_cmdctl_programmed = false;
+    sf2000_sdio_command_order_violation = false;
+    sf2000_sdio_post_completion_ack_pending = false;
     sf2000_sdio_stall_once_consumed = false;
     sf2000_sdio_stale_once_consumed = false;
     sf2000_last_unifrog_trace_count = 0;
