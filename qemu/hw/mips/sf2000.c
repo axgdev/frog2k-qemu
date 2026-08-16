@@ -97,6 +97,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(SF2000LCDState, SF2000_LCD)
 #define SF2000_LCD_WIDTH       320
 #define SF2000_LCD_HEIGHT      240
 #define SF2000_PANEL_TE_CONDITIONING_EDGES 4u
+/*
+ * How many consecutive scanout refreshes must observe the RGB pad mux in an
+ * incomplete state before QEMU reports a guest error.  The bootloader writes
+ * the seven mux registers sequentially, so a single 60 Hz sample can land
+ * mid-sequence; a real stuck mux (the Linux bank-address scramble class)
+ * persists across many samples and is still reported.
+ */
+#define SF2000_PANEL_PAD_MUX_CONFIRM_SAMPLES 3u
 #define SF2000_CHIP_ID_VALUE   0x1512a501
 #define SF2000_HC15XX_CHIP_ID  0x1512
 #define SF2000_IRC_BASE        0x18818100ULL
@@ -1498,6 +1506,7 @@ struct SF2000LCDState {
     bool panel_h3_dispon_seen;
     bool panel_h3_handoff_logged;
     bool panel_pad_mux_invalid_logged;
+    unsigned panel_pad_mux_invalid_samples;
     bool panel_rgb_pad_seen;
     bool panel_te_rearm_pending;
     bool panel_te_rearm_seen;
@@ -2035,6 +2044,7 @@ static bool sf2000_sdio_cmd_programmed;
 static bool sf2000_sdio_cmdctl_programmed;
 static bool sf2000_sdio_command_order_violation;
 static bool sf2000_sdio_post_completion_ack_pending;
+static bool sf2000_sdio_no_r3_pending;
 static bool sf2000_sdio_contract_command_failed;
 static bool sf2000_sdio_reset_contract_window;
 static bool sf2000_sb_timer_irq_masked;
@@ -2205,6 +2215,7 @@ static void sf2000_sdio_ip_reset(void)
     sf2000_sdio_cmdctl_programmed = false;
     sf2000_sdio_command_order_violation = false;
     sf2000_sdio_post_completion_ack_pending = false;
+    sf2000_sdio_no_r3_pending = false;
     sf2000_sdio_reset_dma_contract_violation = false;
     sf2000_sdio_contract_command_failed = false;
     sf2000_sdio_reset_contract_window = true;
@@ -6531,6 +6542,14 @@ static bool sf2000_sdio_cmd8_malformed_response(void)
            (!strcmp(setting, "1") || !strcmp(setting, "yes"));
 }
 
+static bool sf2000_sdio_no_r3_done(void)
+{
+    const char *setting = g_getenv("SF2000_SDIO_NO_R3_DONE");
+
+    return sf2000_sdio_native_guest() && setting &&
+           (!strcmp(setting, "1") || !strcmp(setting, "yes"));
+}
+
 static bool sf2000_sdio_validate_native_command_control(void)
 {
     uint8_t expected;
@@ -6849,10 +6868,34 @@ static void sf2000_sdio_complete_cmd(void)
     sf2000_sdio_cmd_control &= ~1u;
 
     /* Bit 6 is the HC15xx command/data completion indication. */
-    sf2000_sdio_xfer_done = true;
-    sf2000_sdio_xfer_busy = false;
-    sf2000_sdio_irq_pending = true;
-    sf2000_sdio_callback_pending = true;
+    if (sf2000_sdio_no_r3_done() &&
+        (sf2000_sdio_cmd_control & 0x30u) == 0x30u) {
+        /*
+         * Physical HC15xx never asserts the DONE bit for R3 (ACMD41)
+         * responses: run 295 captured cmdctl-read 0x32 (start bit cleared)
+         * with irq 0x00 and the native wait froze in the OCR poll.  The
+         * Linux hc15 host accepts exactly this start-bit-clear as the
+         * terminal event for every no-data command, so withhold DONE here
+         * (IRQSTS 0x00, STATUS 0xec) and let the native reader complete the
+         * OCR exchange through the start-bit-clear path.
+         */
+        sf2000_sdio_no_r3_pending = true;
+        sf2000_sdio_xfer_done = false;
+        sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_irq_pending = false;
+        sf2000_sdio_callback_pending = false;
+        qemu_log_mask(LOG_UNIMP,
+                      "sf2000: SDIO R3 command cmd=%u%s arg=0x%08x "
+                      "DONE withheld\n",
+                      sf2000_sdio_cmd, is_app_cmd ? " app" : "",
+                      sf2000_sdio_arg);
+    } else {
+        sf2000_sdio_no_r3_pending = false;
+        sf2000_sdio_xfer_done = true;
+        sf2000_sdio_xfer_busy = false;
+        sf2000_sdio_irq_pending = true;
+        sf2000_sdio_callback_pending = true;
+    }
 
     if (sf2000_trace_sdio()) {
         qemu_log_mask(LOG_UNIMP,
@@ -7843,16 +7886,18 @@ static uint64_t sf2000_unimp_read(void *opaque, hwaddr addr, unsigned size)
          * The helper traces show an in-flight 0xa8 family while the controller
          * is busy and the terminal 0xe4 family once the transfer completes.
          */
-        value = (sf2000_sdio_xfer_busy || sf2000_sdio_write_active) ? 0xa8 :
-                (sf2000_sdio_contract_command_failed ? 0xe8 :
-                 sf2000_sdio_terminal_status());
+        value = sf2000_sdio_no_r3_pending ? 0xec :
+                ((sf2000_sdio_xfer_busy || sf2000_sdio_write_active) ? 0xa8 :
+                 (sf2000_sdio_contract_command_failed ? 0xe8 :
+                  sf2000_sdio_terminal_status()));
     } else if (full_addr == 0x1884c00e) {
         value = sf2000_sdio_pio_state;
     } else if (full_addr == 0x1884c00b) {
         value = sf2000_sdio_xfer_done ? 0x0c : 0x09;
     } else if (full_addr == 0x1884c030) {
-        value = sf2000_sdio_xfer_done ? sf2000_sdio_terminal_irq() :
-                (sf2000_sdio_xfer_busy ? 0x21 : 0x20);
+        value = sf2000_sdio_no_r3_pending ? 0x00 :
+                (sf2000_sdio_xfer_done ? sf2000_sdio_terminal_irq() :
+                 (sf2000_sdio_xfer_busy ? 0x21 : 0x20));
     } else if (sf2000_ge_decode(full_addr)) {
         uint32_t ge_value;
 
@@ -8930,6 +8975,21 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
          (rgb_pad_t0c & 0x00ffffffu) != 0x00060606u ||
          (rgb_pad_t00 & 0xffff0000u) != 0x06060000u ||
          (rgb_pad_t04 & 0x00ffffffu) != 0x00060606u)) {
+        /*
+         * The guest programs the shared RGB pad mux with several sequential
+         * sysio writes (sf2000_panel_rgb_pad_mux: L04, L00, T08, T0c, T00,
+         * T04, L08).  The scanout refresh can land between two writes, so a
+         * single-sample oracle would log a false "incomplete" for the
+         * bootloader's legitimate one-shot sequence.  Require the incomplete
+         * state to persist across consecutive refresh samples (~50 ms at
+         * 60 Hz): a genuinely stuck mux (the Linux bank-address scramble
+         * class) stays incomplete and is still caught, while a transient
+         * mid-sequence sample is ignored.
+         */
+        if (++s->panel_pad_mux_invalid_samples <
+            SF2000_PANEL_PAD_MUX_CONFIRM_SAMPLES) {
+            return 0;
+        }
         sf2000_vou_present_unlatched_background(s);
         if (!s->panel_pad_mux_invalid_logged) {
             s->panel_pad_mux_invalid_logged = true;
@@ -8941,6 +9001,7 @@ static uint32_t sf2000_gma_present_block(SF2000LCDState *s, uint32_t dmba_addr,
         }
         return 0;
     }
+    s->panel_pad_mux_invalid_samples = 0;
     if (sf2000_panel_rgb_handoff_active(s) &&
         sf2000_panel_rgb_pad_is_active()) {
         s->panel_rgb_pad_seen = true;
