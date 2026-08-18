@@ -593,6 +593,27 @@ static unsigned sf2000_audio_dma_channels(void)
     return 0;
 }
 
+static bool sf2000_audio_pll_valid(uint32_t pll)
+{
+    /*
+     * PLL words produced by the sf2000-pcm multi-rate driver for its nine
+     * supported rates (patches/linux-7.1.4/0029-sf2000-multirate-audio.patch).
+     * 44100/48000 and 11025/12000 share a PLL word and differ only in the
+     * I2S M/N divisors at SYS+0x478/0x47a, which this model accepts as-is.
+     */
+    switch (pll) {
+    case SF2000_AUDIO_PLL_32K:      /* 32000 */
+    case 0x30000080:                /* 8000 */
+    case 0x20000300:                /* 11025 / 12000 */
+    case 0x18000240:                /* 16000 */
+    case 0x10000180:                /* 22050 / 24000 */
+    case 0x080000c0:                /* 44100 / 48000 */
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool sf2000_audio_dma_configured(void)
 {
     uint32_t pll = 0;
@@ -609,7 +630,7 @@ static bool sf2000_audio_dma_configured(void)
     return sf2000_audio_dma_channels() != 0 &&
            (sf2000_audio_snd_ctl04 & (BIT(0) | BIT(8) | BIT(16))) ==
                (BIT(0) | BIT(8) | BIT(16)) &&
-           pll == SF2000_AUDIO_PLL_32K && (gate & BIT(14)) &&
+           sf2000_audio_pll_valid(pll) && (gate & BIT(14)) &&
            sf2000_audio_apll_reset_seen;
 }
 
