@@ -1973,6 +1973,19 @@ static bool sf2000_ge_no_irq;
  * verification failure without perturbing normal QEMU behavior. */
 static bool sf2000_ge_fault_dest;
 static unsigned sf2000_ge_rgb16_blit_count;
+/* Optional command-work counters.  QEMU's host wall clock is not a useful
+ * SF2000 CPU benchmark, but these deterministic GE counters expose the work
+ * the physical engine would have taken (doorbells, command words, nodes and
+ * pixels).  They are enabled only for oracle runs. */
+static int sf2000_ge_profile_enabled_cache = -1;
+static uint64_t sf2000_ge_profile_queues;
+static uint64_t sf2000_ge_profile_queue_words;
+static uint64_t sf2000_ge_profile_nodes;
+static uint64_t sf2000_ge_profile_node_words;
+static uint64_t sf2000_ge_profile_fill_nodes;
+static uint64_t sf2000_ge_profile_blit_nodes;
+static uint64_t sf2000_ge_profile_stretch_nodes;
+static uint64_t sf2000_ge_profile_pixels;
 
 static bool sf2000_machine_ge_fault_dest_get(Object *obj, Error **errp)
 {
@@ -4592,6 +4605,36 @@ static bool sf2000_trace_ge(void)
     return sf2000_ge_dump_limit() > 0;
 }
 
+static bool sf2000_ge_profile(void)
+{
+    if (sf2000_ge_profile_enabled_cache < 0) {
+        const char *env = g_getenv("SF2000_GE_PROFILE");
+
+        sf2000_ge_profile_enabled_cache =
+            env && env[0] && g_strcmp0(env, "0") != 0;
+    }
+    return sf2000_ge_profile_enabled_cache != 0;
+}
+
+static void sf2000_ge_profile_report(const char *kind)
+{
+    if (!sf2000_ge_profile()) {
+        return;
+    }
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: ge-profile kind=%s queues=%" PRIu64
+                  " queue_words=%" PRIu64 " nodes=%" PRIu64
+                  " node_words=%" PRIu64 " fills=%" PRIu64
+                  " blits=%" PRIu64 " stretches=%" PRIu64
+                  " pixels=%" PRIu64 "\n",
+                  kind, sf2000_ge_profile_queues,
+                  sf2000_ge_profile_queue_words, sf2000_ge_profile_nodes,
+                  sf2000_ge_profile_node_words, sf2000_ge_profile_fill_nodes,
+                  sf2000_ge_profile_blit_nodes,
+                  sf2000_ge_profile_stretch_nodes,
+                  sf2000_ge_profile_pixels);
+}
+
 static bool sf2000_ge_read_node(uint32_t first, uint32_t *node,
                                 uint32_t words)
 {
@@ -5154,6 +5197,12 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
     if (!dst_address || !dst_bytes || !dw || !dh) {
         return;
     }
+    if (sf2000_ge_profile()) {
+        /* Grouped nodes are the format-aware path used by raw PS1 BGR555
+         * presents. Count destination pixels even when the node is not one
+         * of the compact RGB16 command encodings above. */
+        sf2000_ge_profile_pixels += (uint64_t)dw * dh;
+    }
 
     /* Preserve the common no-effect solid rectangle fast path. */
     if ((group[0][0] & 0x3f) == 3 && group[5] && !group[7] &&
@@ -5342,8 +5391,18 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
     uint32_t height;
     size_t len;
 
+    if (sf2000_ge_profile()) {
+        sf2000_ge_profile_nodes++;
+        sf2000_ge_profile_node_words += words;
+    }
+
     if (words == 14 && node[0] == 0x02008367 && node[1] == 0x00a00003 &&
         ((node[3] >> 12) & 0x1f) == 6) {
+        if (sf2000_ge_profile()) {
+            sf2000_ge_profile_fill_nodes++;
+            sf2000_ge_profile_pixels +=
+                (uint64_t)(node[11] & 0xfffu) * (node[11] >> 16);
+        }
         sf2000_ge_rgb16_fill(node[2], (node[3] & 0xfff) * 2u,
                              node[10], node[11], node[6]);
         return;
@@ -5351,6 +5410,11 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
     if (words == 9 && node[0] == 0x02000307 && node[1] == 0x00000002 &&
         ((node[3] >> 12) & 0x1f) == 6 &&
         ((node[5] >> 12) & 0x1f) == 6) {
+        if (sf2000_ge_profile()) {
+            sf2000_ge_profile_blit_nodes++;
+            sf2000_ge_profile_pixels +=
+                (uint64_t)(node[7] & 0xfffu) * (node[7] >> 16);
+        }
         sf2000_ge_rgb16_blit(node[2], (node[3] & 0xfff) * 2u,
                              node[4], (node[5] & 0xfff) * 2u,
                              node[6], node[7], node[8]);
@@ -5361,6 +5425,11 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
         ((node[7] >> 12) & 0x1f) == 6 &&
         !(node[7] & 0x00300000u) && node[13] == 0x00004000u &&
         node[15] == 0x00000080) {
+        if (sf2000_ge_profile()) {
+            sf2000_ge_profile_stretch_nodes++;
+            sf2000_ge_profile_pixels +=
+                (uint64_t)(node[9] & 0xfffu) * (node[9] >> 16);
+        }
         sf2000_ge_rgb16_stretch(node[2], (node[3] & 0xfff) * 2u,
                                 node[6], (node[7] & 0xfff) * 2u,
                                 node[9], node[12]);
@@ -5476,6 +5545,10 @@ static void sf2000_ge_complete_queue(void)
         sf2000_mmio_set32(SF2000_GE_STATUS, 0);
         return;
     }
+    if (sf2000_ge_profile()) {
+        sf2000_ge_profile_queues++;
+        sf2000_ge_profile_queue_words += words;
+    }
     for (offset = 0; offset < words; ) {
         uint32_t header_offset = offset;
         unsigned node_words;
@@ -5522,6 +5595,12 @@ static void sf2000_ge_complete_queue(void)
     }
 
     g_free(node);
+
+    if (sf2000_ge_profile() &&
+        (sf2000_ge_submit_sequence <= 8 ||
+         !(sf2000_ge_submit_sequence % 300))) {
+        sf2000_ge_profile_report("complete");
+    }
 
     sf2000_mmio_set32(SF2000_GE_STATUS, 0);
     /*
@@ -9997,6 +10076,14 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_ge_reset_assert_ns = -1;
     sf2000_ge_submit_sequence = 0;
     sf2000_ge_irq_ack_sequence = 0;
+    sf2000_ge_profile_queues = 0;
+    sf2000_ge_profile_queue_words = 0;
+    sf2000_ge_profile_nodes = 0;
+    sf2000_ge_profile_node_words = 0;
+    sf2000_ge_profile_fill_nodes = 0;
+    sf2000_ge_profile_blit_nodes = 0;
+    sf2000_ge_profile_stretch_nodes = 0;
+    sf2000_ge_profile_pixels = 0;
     sf2000_handoff_flush_logged = false;
     sf2000_handoff_asm_logged = false;
     sf2000_handoff_exception_logged = false;
