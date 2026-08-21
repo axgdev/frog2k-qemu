@@ -4775,6 +4775,7 @@ static unsigned sf2000_ge_format_bytes(uint32_t context)
     case 5: /* ARGB1555 */
     case 6: /* RGB565 */
     case 3: /* ARGB4444 */
+    case 4: /* RGB555/BGR555; rgb_order is carried in bits 17..18 */
         return 2;
     case 12: /* CLUT8, used by stock firmware */
     case 29: /* A8 source mask */
@@ -4801,6 +4802,11 @@ static uint32_t sf2000_ge_expand_pixel(uint32_t value, unsigned format)
                ((value >> 10 & 0x1f) * 255u / 31u << 16) |
                ((value >> 5 & 0x1f) * 255u / 31u << 8) |
                ((value & 0x1f) * 255u / 31u);
+    case 4:
+        return 0xff000000u |
+               ((value >> 10 & 0x1f) * 255u / 31u << 16) |
+               ((value >> 5 & 0x1f) * 255u / 31u << 8) |
+               ((value & 0x1f) * 255u / 31u);
     case 6:
         return 0xff000000u |
                ((value >> 11 & 0x1f) * 255u / 31u << 16) |
@@ -4813,17 +4819,38 @@ static uint32_t sf2000_ge_expand_pixel(uint32_t value, unsigned format)
     }
 }
 
+/*
+ * Code 4 is shared by RGB555 and BGR555.  The physical HC15xx keeps the
+ * channel order in the source/destination context's rgb_order field (bits
+ * 17..18); ORDER_BGR is 1.  PS1 VRAM uses that order: red is in bits 0..4
+ * and blue in bits 10..14.  Keep the context-aware conversion separate from
+ * sf2000_ge_expand_pixel(), whose format-only interface is also used for
+ * legacy grouped-node color literals.
+ */
+static uint32_t sf2000_ge_expand_surface_pixel(uint32_t value,
+                                                uint32_t context)
+{
+    unsigned format = context >> 12 & 0x1f;
+
+    if (format == 4 && ((context >> 17) & 3u) == 1u) {
+        return 0xff000000u |
+               ((value & 0x1f) * 255u / 31u << 16) |
+               ((value >> 5 & 0x1f) * 255u / 31u << 8) |
+               ((value >> 10 & 0x1f) * 255u / 31u);
+    }
+    return sf2000_ge_expand_pixel(value, format);
+}
+
 static uint32_t sf2000_ge_read_pixel(uint32_t address, uint32_t context)
 {
     uint32_t value = 0;
-    unsigned format = context >> 12 & 0x1f;
     unsigned bytes = sf2000_ge_format_bytes(context);
 
     if (!bytes || address_space_read(&address_space_memory, address,
             MEMTXATTRS_UNSPECIFIED, &value, bytes) != MEMTX_OK) {
         return 0;
     }
-    return sf2000_ge_expand_pixel(le32_to_cpu(value), format);
+    return sf2000_ge_expand_surface_pixel(le32_to_cpu(value), context);
 }
 
 static void sf2000_ge_write_pixel(uint32_t address, uint32_t context,
@@ -4845,6 +4872,18 @@ static void sf2000_ge_write_pixel(uint32_t address, uint32_t context,
     case 5:
         value = (argb >> 31) << 15 | (argb >> 19 & 0x1f) << 10 |
                 (argb >> 11 & 0x1f) << 5 | (argb >> 3 & 0x1f);
+        break;
+    case 4:
+        if (((context >> 17) & 3u) == 1u) {
+            /* ORDER_BGR: red occupies the low five source bits. */
+            value = (argb >> 3 & 0x1f) |
+                    (argb >> 11 & 0x1f) << 5 |
+                    (argb >> 19 & 0x1f) << 10;
+        } else {
+            value = (argb >> 19 & 0x1f) << 10 |
+                    (argb >> 11 & 0x1f) << 5 |
+                    (argb >> 3 & 0x1f);
+        }
         break;
     case 6:
         value = (argb >> 19 & 0x1f) << 11 |
@@ -5153,8 +5192,8 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
                                                                    dst_context);
 
                 if (group[7] && !sf2000_ge_destination_key_allows(rop,
-                        destination_color, sf2000_ge_expand_pixel(group[7][0],
-                            dst_context >> 12 & 0x1f))) {
+                    destination_color, sf2000_ge_expand_surface_pixel(
+                            group[7][0], dst_context))) {
                     continue;
                 }
                 sf2000_ge_write_pixel(address, dst_context,
