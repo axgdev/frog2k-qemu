@@ -1973,6 +1973,19 @@ static bool sf2000_ge_no_irq;
  * verification failure without perturbing normal QEMU behavior. */
 static bool sf2000_ge_fault_dest;
 static unsigned sf2000_ge_rgb16_blit_count;
+/* Optional command-work counters.  QEMU's host wall clock is not a useful
+ * SF2000 CPU benchmark, but these deterministic GE counters expose the work
+ * the physical engine would have taken (doorbells, command words, nodes and
+ * pixels).  They are enabled only for oracle runs. */
+static int sf2000_ge_profile_enabled_cache = -1;
+static uint64_t sf2000_ge_profile_queues;
+static uint64_t sf2000_ge_profile_queue_words;
+static uint64_t sf2000_ge_profile_nodes;
+static uint64_t sf2000_ge_profile_node_words;
+static uint64_t sf2000_ge_profile_fill_nodes;
+static uint64_t sf2000_ge_profile_blit_nodes;
+static uint64_t sf2000_ge_profile_stretch_nodes;
+static uint64_t sf2000_ge_profile_pixels;
 
 static bool sf2000_machine_ge_fault_dest_get(Object *obj, Error **errp)
 {
@@ -4592,6 +4605,36 @@ static bool sf2000_trace_ge(void)
     return sf2000_ge_dump_limit() > 0;
 }
 
+static bool sf2000_ge_profile(void)
+{
+    if (sf2000_ge_profile_enabled_cache < 0) {
+        const char *env = g_getenv("SF2000_GE_PROFILE");
+
+        sf2000_ge_profile_enabled_cache =
+            env && env[0] && g_strcmp0(env, "0") != 0;
+    }
+    return sf2000_ge_profile_enabled_cache != 0;
+}
+
+static void sf2000_ge_profile_report(const char *kind)
+{
+    if (!sf2000_ge_profile()) {
+        return;
+    }
+    qemu_log_mask(LOG_UNIMP,
+                  "sf2000: ge-profile kind=%s queues=%" PRIu64
+                  " queue_words=%" PRIu64 " nodes=%" PRIu64
+                  " node_words=%" PRIu64 " fills=%" PRIu64
+                  " blits=%" PRIu64 " stretches=%" PRIu64
+                  " pixels=%" PRIu64 "\n",
+                  kind, sf2000_ge_profile_queues,
+                  sf2000_ge_profile_queue_words, sf2000_ge_profile_nodes,
+                  sf2000_ge_profile_node_words, sf2000_ge_profile_fill_nodes,
+                  sf2000_ge_profile_blit_nodes,
+                  sf2000_ge_profile_stretch_nodes,
+                  sf2000_ge_profile_pixels);
+}
+
 static bool sf2000_ge_read_node(uint32_t first, uint32_t *node,
                                 uint32_t words)
 {
@@ -4775,6 +4818,7 @@ static unsigned sf2000_ge_format_bytes(uint32_t context)
     case 5: /* ARGB1555 */
     case 6: /* RGB565 */
     case 3: /* ARGB4444 */
+    case 4: /* RGB555/BGR555; rgb_order is carried in bits 17..18 */
         return 2;
     case 12: /* CLUT8, used by stock firmware */
     case 29: /* A8 source mask */
@@ -4801,6 +4845,11 @@ static uint32_t sf2000_ge_expand_pixel(uint32_t value, unsigned format)
                ((value >> 10 & 0x1f) * 255u / 31u << 16) |
                ((value >> 5 & 0x1f) * 255u / 31u << 8) |
                ((value & 0x1f) * 255u / 31u);
+    case 4:
+        return 0xff000000u |
+               ((value >> 10 & 0x1f) * 255u / 31u << 16) |
+               ((value >> 5 & 0x1f) * 255u / 31u << 8) |
+               ((value & 0x1f) * 255u / 31u);
     case 6:
         return 0xff000000u |
                ((value >> 11 & 0x1f) * 255u / 31u << 16) |
@@ -4813,17 +4862,38 @@ static uint32_t sf2000_ge_expand_pixel(uint32_t value, unsigned format)
     }
 }
 
+/*
+ * Code 4 is shared by RGB555 and BGR555.  The physical HC15xx keeps the
+ * channel order in the source/destination context's rgb_order field (bits
+ * 17..18); ORDER_BGR is 1.  PS1 VRAM uses that order: red is in bits 0..4
+ * and blue in bits 10..14.  Keep the context-aware conversion separate from
+ * sf2000_ge_expand_pixel(), whose format-only interface is also used for
+ * legacy grouped-node color literals.
+ */
+static uint32_t sf2000_ge_expand_surface_pixel(uint32_t value,
+                                                uint32_t context)
+{
+    unsigned format = context >> 12 & 0x1f;
+
+    if (format == 4 && ((context >> 17) & 3u) == 1u) {
+        return 0xff000000u |
+               ((value & 0x1f) * 255u / 31u << 16) |
+               ((value >> 5 & 0x1f) * 255u / 31u << 8) |
+               ((value >> 10 & 0x1f) * 255u / 31u);
+    }
+    return sf2000_ge_expand_pixel(value, format);
+}
+
 static uint32_t sf2000_ge_read_pixel(uint32_t address, uint32_t context)
 {
     uint32_t value = 0;
-    unsigned format = context >> 12 & 0x1f;
     unsigned bytes = sf2000_ge_format_bytes(context);
 
     if (!bytes || address_space_read(&address_space_memory, address,
             MEMTXATTRS_UNSPECIFIED, &value, bytes) != MEMTX_OK) {
         return 0;
     }
-    return sf2000_ge_expand_pixel(le32_to_cpu(value), format);
+    return sf2000_ge_expand_surface_pixel(le32_to_cpu(value), context);
 }
 
 static void sf2000_ge_write_pixel(uint32_t address, uint32_t context,
@@ -4845,6 +4915,18 @@ static void sf2000_ge_write_pixel(uint32_t address, uint32_t context,
     case 5:
         value = (argb >> 31) << 15 | (argb >> 19 & 0x1f) << 10 |
                 (argb >> 11 & 0x1f) << 5 | (argb >> 3 & 0x1f);
+        break;
+    case 4:
+        if (((context >> 17) & 3u) == 1u) {
+            /* ORDER_BGR: red occupies the low five source bits. */
+            value = (argb >> 3 & 0x1f) |
+                    (argb >> 11 & 0x1f) << 5 |
+                    (argb >> 19 & 0x1f) << 10;
+        } else {
+            value = (argb >> 19 & 0x1f) << 10 |
+                    (argb >> 11 & 0x1f) << 5 |
+                    (argb >> 3 & 0x1f);
+        }
         break;
     case 6:
         value = (argb >> 19 & 0x1f) << 11 |
@@ -5115,6 +5197,12 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
     if (!dst_address || !dst_bytes || !dw || !dh) {
         return;
     }
+    if (sf2000_ge_profile()) {
+        /* Grouped nodes are the format-aware path used by raw PS1 BGR555
+         * presents. Count destination pixels even when the node is not one
+         * of the compact RGB16 command encodings above. */
+        sf2000_ge_profile_pixels += (uint64_t)dw * dh;
+    }
 
     /* Preserve the common no-effect solid rectangle fast path. */
     if ((group[0][0] & 0x3f) == 3 && group[5] && !group[7] &&
@@ -5153,8 +5241,8 @@ static void sf2000_ge_execute_grouped_node(uint32_t *node, uint32_t words)
                                                                    dst_context);
 
                 if (group[7] && !sf2000_ge_destination_key_allows(rop,
-                        destination_color, sf2000_ge_expand_pixel(group[7][0],
-                            dst_context >> 12 & 0x1f))) {
+                    destination_color, sf2000_ge_expand_surface_pixel(
+                            group[7][0], dst_context))) {
                     continue;
                 }
                 sf2000_ge_write_pixel(address, dst_context,
@@ -5303,8 +5391,18 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
     uint32_t height;
     size_t len;
 
+    if (sf2000_ge_profile()) {
+        sf2000_ge_profile_nodes++;
+        sf2000_ge_profile_node_words += words;
+    }
+
     if (words == 14 && node[0] == 0x02008367 && node[1] == 0x00a00003 &&
         ((node[3] >> 12) & 0x1f) == 6) {
+        if (sf2000_ge_profile()) {
+            sf2000_ge_profile_fill_nodes++;
+            sf2000_ge_profile_pixels +=
+                (uint64_t)(node[11] & 0xfffu) * (node[11] >> 16);
+        }
         sf2000_ge_rgb16_fill(node[2], (node[3] & 0xfff) * 2u,
                              node[10], node[11], node[6]);
         return;
@@ -5312,6 +5410,11 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
     if (words == 9 && node[0] == 0x02000307 && node[1] == 0x00000002 &&
         ((node[3] >> 12) & 0x1f) == 6 &&
         ((node[5] >> 12) & 0x1f) == 6) {
+        if (sf2000_ge_profile()) {
+            sf2000_ge_profile_blit_nodes++;
+            sf2000_ge_profile_pixels +=
+                (uint64_t)(node[7] & 0xfffu) * (node[7] >> 16);
+        }
         sf2000_ge_rgb16_blit(node[2], (node[3] & 0xfff) * 2u,
                              node[4], (node[5] & 0xfff) * 2u,
                              node[6], node[7], node[8]);
@@ -5322,6 +5425,11 @@ static void sf2000_ge_execute_node(uint32_t *node, uint32_t words)
         ((node[7] >> 12) & 0x1f) == 6 &&
         !(node[7] & 0x00300000u) && node[13] == 0x00004000u &&
         node[15] == 0x00000080) {
+        if (sf2000_ge_profile()) {
+            sf2000_ge_profile_stretch_nodes++;
+            sf2000_ge_profile_pixels +=
+                (uint64_t)(node[9] & 0xfffu) * (node[9] >> 16);
+        }
         sf2000_ge_rgb16_stretch(node[2], (node[3] & 0xfff) * 2u,
                                 node[6], (node[7] & 0xfff) * 2u,
                                 node[9], node[12]);
@@ -5437,6 +5545,10 @@ static void sf2000_ge_complete_queue(void)
         sf2000_mmio_set32(SF2000_GE_STATUS, 0);
         return;
     }
+    if (sf2000_ge_profile()) {
+        sf2000_ge_profile_queues++;
+        sf2000_ge_profile_queue_words += words;
+    }
     for (offset = 0; offset < words; ) {
         uint32_t header_offset = offset;
         unsigned node_words;
@@ -5483,6 +5595,12 @@ static void sf2000_ge_complete_queue(void)
     }
 
     g_free(node);
+
+    if (sf2000_ge_profile() &&
+        (sf2000_ge_submit_sequence <= 8 ||
+         !(sf2000_ge_submit_sequence % 300))) {
+        sf2000_ge_profile_report("complete");
+    }
 
     sf2000_mmio_set32(SF2000_GE_STATUS, 0);
     /*
@@ -9958,6 +10076,14 @@ static void sf2000_cpu_reset(void *opaque)
     sf2000_ge_reset_assert_ns = -1;
     sf2000_ge_submit_sequence = 0;
     sf2000_ge_irq_ack_sequence = 0;
+    sf2000_ge_profile_queues = 0;
+    sf2000_ge_profile_queue_words = 0;
+    sf2000_ge_profile_nodes = 0;
+    sf2000_ge_profile_node_words = 0;
+    sf2000_ge_profile_fill_nodes = 0;
+    sf2000_ge_profile_blit_nodes = 0;
+    sf2000_ge_profile_stretch_nodes = 0;
+    sf2000_ge_profile_pixels = 0;
     sf2000_handoff_flush_logged = false;
     sf2000_handoff_asm_logged = false;
     sf2000_handoff_exception_logged = false;
